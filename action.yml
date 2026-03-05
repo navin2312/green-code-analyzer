@@ -36,7 +36,7 @@ inputs:
   llm-enabled:
     description: >
       Set to 'true' to enable Phase 2 LLM semantic analysis.
-      Auto-enabled if groq-api-key or anthropic-api-key is provided.
+      Auto-enabled if groq-api-key is provided.
     required: false
     default: 'false'
 
