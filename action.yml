@@ -33,6 +33,28 @@ inputs:
     required: false
     default: 'low'
 
+  llm-enabled:
+    description: >
+      Set to 'true' to enable Phase 2 LLM semantic analysis via Ollama.
+      Requires Ollama running on a self-hosted runner or accessible endpoint.
+    required: false
+    default: 'false'
+
+  llm-endpoint:
+    description: >
+      URL of the Ollama API endpoint.
+      Default is localhost — override if Ollama runs on a different host.
+    required: false
+    default: 'http://localhost:11434'
+
+  llm-model:
+    description: >
+      Ollama model to use for semantic analysis.
+      Recommended: codellama, deepseek-coder, mistral, llama3.
+      The model must already be pulled: ollama pull <model>
+    required: false
+    default: 'codellama'
+
 outputs:
   energy-score:
     description: 'Total energy anti-pattern score (sum of energyPoints across all findings)'

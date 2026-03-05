@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Green Code Analyzer — Presentation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    overflow: hidden;
+  }
+
+  /* ── Slide Container ── */
+  .slideshow { width: 100vw; height: 100vh; position: relative; }
+
+  .slide {
+    display: none;
+    position: absolute;
+    inset: 0;
+    padding: 60px 80px;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .slide.active { display: flex; }
+
+  /* ── Backgrounds ── */
+  .slide-title   { background: linear-gradient(135deg, #0a3d1f 0%, #0d1117 60%); }
+  .slide-problem { background: linear-gradient(135deg, #1a0a0a 0%, #0d1117 60%); }
+  .slide-default { background: #0d1117; }
+
+  /* ── Accent bar ── */
+  .accent {
+    width: 60px; height: 5px;
+    background: #2ea043;
+    border-radius: 3px;
+    margin-bottom: 20px;
+  }
+  .accent.red  { background: #f85149; }
+  .accent.blue { background: #388bfd; }
+  .accent.gold { background: #d29922; }
+
+  /* ── Typography ── */
+  h1 { font-size: 3rem; font-weight: 700; line-height: 1.15; color: #fff; }
+  h2 { font-size: 2rem; font-weight: 700; color: #fff; margin-bottom: 10px; }
+  h3 { font-size: 1.15rem; font-weight: 600; color: #2ea043; margin-bottom: 8px; }
+  p  { font-size: 1.05rem; color: #8b949e; line-height: 1.7; }
+  .subtitle { font-size: 1.3rem; color: #8b949e; margin-top: 12px; }
+  .tag { font-size: 0.8rem; color: #2ea043; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 14px; }
+
+  /* ── Slide number ── */
+  .slide-num {
+    position: fixed; bottom: 24px; right: 40px;
+    font-size: 0.8rem; color: #30363d;
+  }
+
+  /* ── Cards grid ── */
+  .grid { display: grid; gap: 18px; margin-top: 24px; }
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+  .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .card h3 { font-size: 0.95rem; }
+  .card p  { font-size: 0.88rem; }
+
+  .card.red-card   { border-color: #f85149; }
+  .card.green-card { border-color: #2ea043; }
+  .card.blue-card  { border-color: #388bfd; }
+  .card.gold-card  { border-color: #d29922; }
+
+  /* ── Big stat ── */
+  .stat-row { display: flex; gap: 40px; margin-top: 30px; }
+  .stat { text-align: center; }
+  .stat .num { font-size: 3.2rem; font-weight: 700; color: #2ea043; }
+  .stat .lbl { font-size: 0.9rem; color: #8b949e; margin-top: 4px; }
+
+  /* ── Code block ── */
+  pre {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 18px 22px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.88rem;
+    color: #e6edf3;
+    overflow: hidden;
+    margin-top: 16px;
+    line-height: 1.6;
+  }
+  .kw  { color: #ff7b72; }
+  .fn  { color: #d2a8ff; }
+  .str { color: #a5d6ff; }
+  .cmt { color: #8b949e; font-style: italic; }
+  .ok  { color: #2ea043; }
+  .bad { color: #f85149; }
+
+  /* ── Badge ── */
+  .badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    margin: 3px;
+  }
+  .b-green  { background: #0f2d1a; color: #2ea043; border: 1px solid #2ea043; }
+  .b-red    { background: #2d0f0f; color: #f85149; border: 1px solid #f85149; }
+  .b-orange { background: #2d1a0f; color: #f0883e; border: 1px solid #f0883e; }
+  .b-yellow { background: #2d270f; color: #d29922; border: 1px solid #d29922; }
+  .b-blue   { background: #0f1d2d; color: #388bfd; border: 1px solid #388bfd; }
+
+  /* ── Grade box ── */
+  .grade-row { display: flex; gap: 16px; margin-top: 28px; align-items: stretch; }
+  .grade-box {
+    flex: 1; text-align: center; padding: 20px 10px;
+    border-radius: 10px; border: 2px solid;
+  }
+  .grade-box .letter { font-size: 2.4rem; font-weight: 700; }
+  .grade-box .range  { font-size: 0.78rem; color: #8b949e; margin-top: 4px; }
+  .grade-box .desc   { font-size: 0.75rem; margin-top: 6px; }
+  .g-green  { border-color: #2ea043; color: #2ea043; }
+  .g-lime   { border-color: #56d364; color: #56d364; }
+  .g-yellow { border-color: #d29922; color: #d29922; }
+  .g-orange { border-color: #f0883e; color: #f0883e; }
+  .g-red    { border-color: #f85149; color: #f85149; }
+
+  /* ── Flow steps ── */
+  .flow { display: flex; align-items: center; gap: 10px; margin-top: 28px; flex-wrap: wrap; }
+  .step {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 18px;
+    text-align: center;
+    min-width: 120px;
+  }
+  .step .icon { font-size: 1.6rem; }
+  .step .lbl  { font-size: 0.78rem; color: #8b949e; margin-top: 6px; }
+  .arrow { color: #2ea043; font-size: 1.4rem; }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.88rem; }
+  th { background: #161b22; color: #8b949e; padding: 10px 14px; text-align: left; border-bottom: 1px solid #21262d; }
+  td { padding: 10px 14px; border-bottom: 1px solid #161b22; color: #e6edf3; }
+  tr:hover td { background: #161b22; }
+
+  /* ── Navigation ── */
+  .nav {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px; align-items: center;
+  }
+  .nav button {
+    background: #21262d; border: 1px solid #30363d; color: #e6edf3;
+    padding: 8px 22px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+    transition: background 0.15s;
+  }
+  .nav button:hover { background: #2ea043; border-color: #2ea043; }
+  .nav .counter { color: #8b949e; font-size: 0.85rem; min-width: 50px; text-align: center; }
+
+  /* ── Print / PDF ── */
+  @media print {
+    body { overflow: visible; background: #fff; color: #000; }
+    .slide { display: flex !important; position: relative; page-break-after: always;
+             height: 100vh; background: #fff !important; }
+    .nav, .slide-num { display: none; }
+    h1, h2, h3 { color: #000; }
+    p { color: #444; }
+    .card { border-color: #ddd; background: #f6f6f6; }
+    pre { background: #f6f6f6; border-color: #ddd; color: #000; }
+  }
+</style>
+</head>
+<body>
+
+<div class="slideshow">
+
+  <!-- ══════════════ SLIDE 1 — TITLE ══════════════ -->
+  <div class="slide slide-title active" id="s1">
+    <div class="tag">Green Software Engineering</div>
+    <h1>🌿 Green Code<br>Analyzer</h1>
+    <p class="subtitle">A GitHub Action &amp; CLI tool that detects energy anti-patterns<br>
+    in JavaScript and Python pull requests — and shows developers how to fix them.</p>
+    <div style="margin-top:40px; display:flex; gap:12px; flex-wrap:wrap;">
+      <span class="badge b-green">GitHub Action</span>
+      <span class="badge b-blue">CLI Tool</span>
+      <span class="badge b-green">JavaScript</span>
+      <span class="badge b-blue">Python</span>
+      <span class="badge b-orange">24 Patterns</span>
+      <span class="badge b-yellow">CO₂ Estimation</span>
+    </div>
+    <div class="stat-row" style="margin-top:48px;">
+      <div class="stat"><div class="num">24</div><div class="lbl">Anti-Patterns</div></div>
+      <div class="stat"><div class="num">45</div><div class="lbl">Tests Passing</div></div>
+      <div class="stat"><div class="num">A–D</div><div class="lbl" style="color:#2ea043">Energy Grade</div></div>
+      <div class="stat"><div class="num">0</div><div class="lbl">Config Needed</div></div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SLIDE 2 — THE PROBLEM ══════════════ -->
+  <div class="slide slide-problem" id="s2">
+    <div class="accent red"></div>
+    <div class="tag">The Problem</div>
+    <h2>Software is a hidden energy consumer</h2>
+    <p style="margin-bottom:24px;">Code that works correctly can still waste enormous amounts of energy.<br>These inefficiencies are invisible during normal code review.</p>
+    <div class="grid grid-2">
+      <div class="card red-card">
+        <h3>🔁 Unnecessary CPU Wake-ups</h3>
+        <p>Polling APIs every 200ms wakes the CPU 5× per second — even when nothing has changed. Event-driven alternatives use zero idle energy.</p>
+      </div>
+      <div class="card red-card">
+        <h3>📡 N+1 Network Requests</h3>
+        <p>Fetching 100 items one by one in a loop sends 100 HTTP requests. One batched call does the same work with 1% of the network energy.</p>
+      </div>
+      <div class="card red-card">
+        <h3>🔄 Busy-Wait Loops</h3>
+        <p>A Python <code>while True:</code> without sleep burns 100% of a CPU core continuously, preventing it from ever entering a low-power state.</p>
+      </div>
+      <div class="card red-card">
+        <h3>🐼 Inefficient Data Processing</h3>
+        <p><code>pandas.iterrows()</code> is up to 1000× slower than vectorised operations — and proportionally more energy-intensive for large datasets.</p>
+      </div>
+    </div>
+    <p style="margin-top:22px; color:#f85149;">→ At scale, across millions of users and thousands of servers, these patterns translate into measurable CO₂ emissions and electricity costs.</p>
+  </div>
+
+  <!-- ══════════════ SLIDE 3 — OUR SOLUTION ══════════════ -->
+  <div class="slide slide-default" id="s3">
+    <div class="accent"></div>
+    <div class="tag">Our Solution</div>
+    <h2>Automated energy review — right in the PR</h2>
+    <p style="margin-bottom:28px;">Green Code Analyzer integrates into the GitHub pull request workflow. Developers get energy feedback the same way they get code review comments — without changing how they work.</p>
+    <div class="grid grid-3">
+      <div class="card green-card">
+        <h3>🤖 Automatic</h3>
+        <p>Triggers on every pull request. No manual steps. No configuration required beyond adding one workflow file.</p>
+      </div>
+      <div class="card green-card">
+        <h3>🎯 Precise</h3>
+        <p>Only analyses lines the developer actually changed in this PR — not the entire codebase. Zero noise from existing code.</p>
+      </div>
+      <div class="card green-card">
+        <h3>💡 Actionable</h3>
+        <p>Every finding includes an exact line number, an explanation of why it wastes energy, and a corrected code example.</p>
+      </div>
+      <div class="card green-card">
+        <h3>📊 Graded</h3>
+        <p>PRs receive an energy efficiency grade from A+ to D based on the severity and count of issues found.</p>
+      </div>
+      <div class="card green-card">
+        <h3>🌍 Quantified</h3>
+        <p>Estimates the Wh/day and grams of CO₂ saved if the issues are fixed — making the impact tangible.</p>
+      </div>
+      <div class="card green-card">
+        <h3>🖥️ CLI Too</h3>
+        <p>Developers can run <code>green-code check</code> locally before pushing — catching issues even earlier.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SLIDE 4 — HOW IT WORKS ══════════════ -->
+  <div class="slide slide-default" id="s4">
+    <div class="accent blue"></div>
+    <div class="tag">Architecture</div>
+    <h2>How it works — end to end</h2>
+    <div class="flow">
+      <div class="step"><div class="icon">📋</div><div class="lbl">PR Opened</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="icon">📥</div><div class="lbl">Fetch Diff<br>via GitHub API</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="icon">🔍</div><div class="lbl">Parse Added<br>Lines Only</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="icon">⚡</div><div class="lbl">Run 24<br>Pattern Detectors</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="icon">📊</div><div class="lbl">Score &amp;<br>Grade</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="icon">💬</div><div class="lbl">Post PR<br>Comment</div></div>
+    </div>
+    <div class="grid grid-2" style="margin-top:28px;">
+      <div class="card">
+        <h3>diff-parser.js</h3>
+        <p>Parses the unified diff format. Extracts only added lines (+) per file, keeping context lines for loop-detection lookback.</p>
+      </div>
+      <div class="card">
+        <h3>analyzer.js</h3>
+        <p>Runs each pattern's <code>detect(lines, index)</code> function. Only reports findings on added lines — context is read-only.</p>
+      </div>
+      <div class="card">
+        <h3>energy-estimator.js</h3>
+        <p>Sums energy points per finding. Maps to A+–D grade. Calculates rough Wh/day and CO₂ savings.</p>
+      </div>
+      <div class="card">
+        <h3>reporter.js</h3>
+        <p>Generates markdown for PR comments (with shields.io badge), ANSI terminal output for CLI, and JSON for integrations.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SLIDE 5 — JS PATTERNS ══════════════ -->
+  <div class="slide slide-default" id="s5">
+    <div class="accent gold"></div>
+    <div class="tag">Detection — JavaScript</div>
+    <h2>12 JavaScript energy anti-patterns</h2>
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Severity</th><th>Why it wastes energy</th></tr>
+      <tr><td>JS001</td><td>setInterval &lt; 1s</td><td><span class="badge b-orange">High</span></td><td>Repeated CPU wake-ups preventing idle states</td></tr>
+      <tr><td>JS002</td><td>fetch() in a loop</td><td><span class="badge b-red">Critical</span></td><td>N separate HTTP requests instead of 1 batch</td></tr>
+      <tr><td>JS003</td><td>No debounce on scroll/resize</td><td><span class="badge b-orange">High</span></td><td>Handler fires up to 300× per second</td></tr>
+      <tr><td>JS004</td><td>DOM query in loop</td><td><span class="badge b-orange">High</span></td><td>Forces layout recalculation per iteration</td></tr>
+      <tr><td>JS005</td><td>Synchronous XHR</td><td><span class="badge b-orange">High</span></td><td>Blocks CPU during entire network wait</td></tr>
+      <tr><td>JS006</td><td>Triple-chained array methods</td><td><span class="badge b-yellow">Medium</span></td><td>Iterates data 3× instead of 1×</td></tr>
+      <tr><td>JS007</td><td>eval()</td><td><span class="badge b-yellow">Medium</span></td><td>Disables JIT compiler optimisation</td></tr>
+      <tr><td>JS008</td><td>JSON.stringify in loop</td><td><span class="badge b-yellow">Medium</span></td><td>Expensive serialisation every iteration</td></tr>
+      <tr><td>JS009</td><td>console.log in loop</td><td><span class="badge b-blue">Low</span></td><td>Synchronous I/O on every iteration</td></tr>
+      <tr><td>JS010</td><td>document.write()</td><td><span class="badge b-yellow">Medium</span></td><td>Destroys and rebuilds entire page DOM</td></tr>
+      <tr><td>JS011</td><td>setTimeout(fn, 0) recursion</td><td><span class="badge b-orange">High</span></td><td>Near-busy-wait async loop</td></tr>
+      <tr><td>JS012</td><td>addEventListener without cleanup</td><td><span class="badge b-yellow">Medium</span></td><td>Memory leak increases GC energy cost</td></tr>
+    </table>
+  </div>
+
+  <!-- ══════════════ SLIDE 6 — PYTHON PATTERNS ══════════════ -->
+  <div class="slide slide-default" id="s6">
+    <div class="accent gold"></div>
+    <div class="tag">Detection — Python</div>
+    <h2>12 Python energy anti-patterns</h2>
+    <table>
+      <tr><th>ID</th><th>Pattern</th><th>Severity</th><th>Why it wastes energy</th></tr>
+      <tr><td>PY001</td><td>String += in loop</td><td><span class="badge b-orange">High</span></td><td>O(n²) string copies — use ''.join()</td></tr>
+      <tr><td>PY002</td><td>df.iterrows()</td><td><span class="badge b-orange">High</span></td><td>Up to 1000× slower than vectorised pandas</td></tr>
+      <tr><td>PY003</td><td>range(len(x))</td><td><span class="badge b-blue">Low</span></td><td>Extra overhead — use enumerate() instead</td></tr>
+      <tr><td>PY004</td><td>while True: (no sleep)</td><td><span class="badge b-red">Critical</span></td><td>100% CPU spin loop, no idle state</td></tr>
+      <tr><td>PY005</td><td>f.readlines()</td><td><span class="badge b-yellow">Medium</span></td><td>Loads entire file into RAM</td></tr>
+      <tr><td>PY006</td><td>Recursive without @lru_cache</td><td><span class="badge b-yellow">Medium</span></td><td>Exponential recomputation O(2ⁿ)</td></tr>
+      <tr><td>PY007</td><td>list.append() in loop</td><td><span class="badge b-blue">Low</span></td><td>Slower than list comprehension</td></tr>
+      <tr><td>PY008</td><td>Empty list created in loop</td><td><span class="badge b-yellow">Medium</span></td><td>Repeated heap allocations</td></tr>
+      <tr><td>PY009</td><td>df.itertuples()</td><td><span class="badge b-yellow">Medium</span></td><td>Still row-by-row — use vectorised ops</td></tr>
+      <tr><td>PY010</td><td>Nested for loops</td><td><span class="badge b-yellow">Medium</span></td><td>O(n²) complexity — use set lookups</td></tr>
+      <tr><td>PY011</td><td>% formatting in loop</td><td><span class="badge b-blue">Low</span></td><td>Slower than f-strings</td></tr>
+      <tr><td>PY012</td><td>len() in while condition</td><td><span class="badge b-blue">Low</span></td><td>Recomputes len() every iteration</td></tr>
+    </table>
+  </div>
+
+  <!-- ══════════════ SLIDE 7 — GRADING ══════════════ -->
+  <div class="slide slide-default" id="s7">
+    <div class="accent"></div>
+    <div class="tag">Scoring System</div>
+    <h2>Energy efficiency grading — A+ to D</h2>
+    <p>Each pattern has an energy weight (5–35 points based on severity). Findings are summed into a total score that maps to a letter grade.</p>
+    <div class="grade-row">
+      <div class="grade-box g-green"><div class="letter">A+</div><div class="range">Score: 0</div><div class="desc">Excellent — no issues found</div></div>
+      <div class="grade-box g-lime"><div class="letter">A</div><div class="range">Score: 1–15</div><div class="desc">Good — minor concerns</div></div>
+      <div class="grade-box g-yellow"><div class="letter">B</div><div class="range">Score: 16–40</div><div class="desc">Fair — some improvements needed</div></div>
+      <div class="grade-box g-orange"><div class="letter">C</div><div class="range">Score: 41–80</div><div class="desc">Needs Work — significant issues</div></div>
+      <div class="grade-box g-red"><div class="letter">D</div><div class="range">Score: 81+</div><div class="desc">Critical — fix before merging</div></div>
+    </div>
+    <div class="grid grid-3" style="margin-top:24px;">
+      <div class="card">
+        <h3>🔴 Critical = 35 pts</h3>
+        <p>e.g. fetch() in loop — one occurrence alone pushes to grade C</p>
+      </div>
+      <div class="card">
+        <h3>🟠 High = 20 pts</h3>
+        <p>e.g. setInterval < 1s — two occurrences reach grade B</p>
+      </div>
+      <div class="card">
+        <h3>🔵 Low = 5–6 pts</h3>
+        <p>e.g. console.log in loop — many needed to affect the grade</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SLIDE 8 — GITHUB ACTION ══════════════ -->
+  <div class="slide slide-default" id="s8">
+    <div class="accent"></div>
+    <div class="tag">GitHub Action</div>
+    <h2>Zero-friction PR integration</h2>
+    <div class="grid grid-2" style="margin-top:10px;">
+      <div>
+        <p style="margin-bottom:10px;">Add one workflow file to any repository — the action handles everything else automatically.</p>
+        <pre><span class="cmt"># .github/workflows/energy-check.yml</span>
+<span class="kw">name:</span> Energy Check
+<span class="kw">on:</span>
+  pull_request:
+<span class="kw">permissions:</span>
+  pull-requests: write
+<span class="kw">jobs:</span>
+  <span class="kw">check:</span>
+    <span class="kw">runs-on:</span> ubuntu-latest
+    <span class="kw">steps:</span>
+      - <span class="kw">uses:</span> <span class="str">actions/checkout@v4</span>
+      - <span class="kw">uses:</span> <span class="str">navin2312/green-code-analyzer@main</span>
+        <span class="kw">with:</span>
+          <span class="kw">github-token:</span> <span class="str">${{ secrets.GITHUB_TOKEN }}</span>
+          <span class="kw">fail-on-issues:</span> <span class="str">'false'</span>
+          <span class="kw">severity-threshold:</span> <span class="str">'low'</span></pre>
+      </div>
+      <div>
+        <p style="margin-bottom:10px;">The action outputs three values usable in downstream steps:</p>
+        <div class="card" style="margin-bottom:14px;">
+          <h3>outputs.grade</h3>
+          <p>Letter grade: A+, A, B, C, or D</p>
+        </div>
+        <div class="card" style="margin-bottom:14px;">
+          <h3>outputs.energy-score</h3>
+          <p>Total numeric score (sum of all finding weights)</p>
+        </div>
+        <div class="card">
+          <h3>outputs.findings-count</h3>
+          <p>Number of issues detected above the severity threshold</p>
+        </div>
+        <p style="margin-top:14px; font-size:0.85rem;">Set <code>fail-on-issues: 'true'</code> to enforce a green gate — PRs with energy issues will fail the check.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SLIDE 9 — CLI ══════════════ -->
+  <div class="slide slide-default" id="s9">
+    <div class="accent blue"></div>
+    <div class="tag">CLI Tool</div>
+    <h2>Catch issues before you push</h2>
+    <div class="grid grid-2" style="margin-top:10px;">
+      <div>
+        <p style="margin-bottom:12px;">Install globally and run against any file, your current git diff, or staged changes.</p>
+        <pre><span class="cmt"># Install</span>
+<span class="fn">npm</span> install -g green-code-analyzer
+
+<span class="cmt"># Check specific files</span>
+<span class="fn">green-code</span> check src/app.js utils.py
+
+<span class="cmt"># Check uncommitted git changes</span>
+<span class="fn">green-code</span> check --git-diff
+
+<span class="cmt"># Check only staged changes</span>
+<span class="fn">green-code</span> check --staged
+
+<span class="cmt"># Output as JSON (for CI integrations)</span>
+<span class="fn">green-code</span> check src/app.js --format json
+
+<span class="cmt"># Fail with exit code 1 if issues found</span>
+<span class="fn">green-code</span> check src/app.js --fail-on-issues
+
+<span class="cmt"># List all known patterns</span>
+<span class="fn">green-code</span> list-patterns</pre>
+      </div>
+      <div>
+        <p style="margin-bottom:12px;">Sample terminal output:</p>
+        <pre style="font-size:0.78rem;">━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Green Code Analyzer
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Grade  : <span class="bad">D — Critical</span>
+  Score  : 87 energy points
+  Issues : 5 (critical:1 high:2)
+  Impact : ~1.8 kWh/day saved
+
+  📄 src/api.js
+
+  <span class="bad">[CRITICAL]</span> Network Request in Loop
+  Line 14: fetch(`/api/users/${id}`)
+  → N round-trips instead of 1 batch
+  Fix: Use Promise.all() or bulk API
+
+  <span class="bad">[HIGH]</span> Frequent Polling (JS001)
+  Line 8: setInterval(..., 300)
+  → 3 CPU wake-ups/sec
+  Fix: Use WebSockets instead</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ SLIDE 10 — IMPACT & FUTURE ══════════════ -->
+  <div class="slide slide-title" id="s10">
+    <div class="accent"></div>
+    <div class="tag">Impact &amp; Roadmap</div>
+    <h2>Making green software the default</h2>
+    <div class="grid grid-2" style="margin-top:24px;">
+      <div>
+        <h3 style="font-size:1rem; margin-bottom:14px;">Current Impact</h3>
+        <div class="card green-card" style="margin-bottom:12px;">
+          <h3>🌍 CO₂ Savings Estimation</h3>
+          <p>Every report includes a rough Wh/day and grams of CO₂ saved — making the environmental cost tangible for developers.</p>
+        </div>
+        <div class="card green-card" style="margin-bottom:12px;">
+          <h3>📏 24 Patterns, 2 Languages</h3>
+          <p>JavaScript and Python covered — the two most widely used languages in web and data engineering.</p>
+        </div>
+        <div class="card green-card">
+          <h3>🔒 Non-invasive</h3>
+          <p>Only analyses changed lines. Never fails builds by default. Purely advisory unless you opt into the green gate.</p>
+        </div>
+      </div>
+      <div>
+        <h3 style="font-size:1rem; margin-bottom:14px;">Future Roadmap</h3>
+        <div class="card blue-card" style="margin-bottom:12px;">
+          <h3>🌐 More Languages</h3>
+          <p>TypeScript, Java, Go — each with their own energy anti-pattern library.</p>
+        </div>
+        <div class="card blue-card" style="margin-bottom:12px;">
+          <h3>🧠 AST-Based Analysis</h3>
+          <p>Replace regex with proper AST parsing for higher accuracy and fewer false positives.</p>
+        </div>
+        <div class="card blue-card" style="margin-bottom:12px;">
+          <h3>📈 Team Dashboards</h3>
+          <p>Track energy grade trends across PRs over time — gamify green software at the team level.</p>
+        </div>
+        <div class="card blue-card">
+          <h3>🔌 VS Code Extension</h3>
+          <p>Real-time energy warnings inline in the editor — catch issues before even committing.</p>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:28px; text-align:center; color:#2ea043; font-size:1rem;">
+      github.com/navin2312/green-code-analyzer
+    </p>
+  </div>
+
+</div><!-- end slideshow -->
+
+<!-- ── Navigation ── -->
+<div class="nav">
+  <button onclick="prev()">← Prev</button>
+  <span class="counter" id="counter">1 / 10</span>
+  <button onclick="next()">Next →</button>
+</div>
+
+<script>
+  let current = 1;
+  const total = 10;
+
+  function show(n) {
+    document.querySelector('.slide.active').classList.remove('active');
+    document.getElementById('s' + n).classList.add('active');
+    document.getElementById('counter').textContent = n + ' / ' + total;
+    current = n;
+  }
+
+  function next() { if (current < total) show(current + 1); }
+  function prev() { if (current > 1)     show(current - 1); }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown'  || e.key === ' ') next();
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                      prev();
+  });
+</script>
+
+</body>
+</html>

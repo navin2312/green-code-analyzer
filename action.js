@@ -3,17 +3,15 @@
 /**
  * GitHub Action entry point.
  *
- * This file is compiled by `npm run build` into dist/index.js using @vercel/ncc,
- * which bundles all dependencies into a single file.
- *
- * Flow:
- *   1. Read inputs (github-token, fail-on-issues, severity-threshold)
- *   2. Detect event context (pull_request or push)
+ * Multi-phase flow:
+ *   1. Read inputs
+ *   2. Detect PR / push context
  *   3. Fetch the diff from GitHub API
- *   4. Parse + analyse the diff
- *   5. Post (or update) a PR comment with the markdown report
- *   6. Set action outputs (energy-score, grade, findings-count)
- *   7. Optionally fail the action if issues were found
+ *   4. Phase 1 — Deterministic pattern analysis (24 rules)
+ *   5. Phase 2 — LLM semantic analysis via Ollama (optional)
+ *   6. Phase 3 — Policy gate evaluation (soft mode)
+ *   7. Post / update PR comment with full 3-phase report
+ *   8. Set action outputs and optionally fail
  */
 
 const core   = require('@actions/core');
@@ -22,6 +20,8 @@ const github = require('@actions/github');
 const { parseDiff }                  = require('./src/diff-parser');
 const { analyze }                    = require('./src/analyzer');
 const { estimate, filterBySeverity } = require('./src/energy-estimator');
+const { analyzeLLM }                 = require('./src/llm-analyzer');
+const { evaluateGates, mergeFindings } = require('./src/policy-gates');
 const { buildMarkdownReport }        = require('./src/reporter');
 
 // Marker so we can find and update our own previous comment
@@ -31,8 +31,11 @@ async function run() {
   try {
     // ── 1. Read inputs ────────────────────────────────────────────────────
     const token          = core.getInput('github-token', { required: true });
-    const failOnIssues   = core.getInput('fail-on-issues')      === 'true';
-    const severityThresh = core.getInput('severity-threshold')  || 'low';
+    const failOnIssues   = core.getInput('fail-on-issues')     === 'true';
+    const severityThresh = core.getInput('severity-threshold') || 'low';
+    const llmEnabled     = core.getInput('llm-enabled')        === 'true';
+    const llmEndpoint    = core.getInput('llm-endpoint')       || 'http://localhost:11434';
+    const llmModel       = core.getInput('llm-model')          || 'codellama';
 
     const octokit = github.getOctokit(token);
     const ctx     = github.context;
@@ -87,37 +90,55 @@ async function run() {
       return;
     }
 
-    // ── 4. Parse + analyse ───────────────────────────────────────────────
-    core.info('Parsing diff...');
-    const parsedFiles = parseDiff(diffContent).filter((f) => f.language);
-
+    // ── 4. Phase 1 — Deterministic pattern analysis ───────────────────────
+    core.info('Phase 1: Running deterministic pattern analysis...');
+    const parsedFiles   = parseDiff(diffContent).filter((f) => f.language);
     core.info(`Found ${parsedFiles.length} supported file(s) in the diff.`);
 
-    const allFindings   = analyze(parsedFiles);
-    const filtered      = filterBySeverity(allFindings, severityThresh);
-    const energySummary = estimate(filtered);
+    const phase1All     = analyze(parsedFiles);
+    const phase1        = filterBySeverity(phase1All, severityThresh);
+    const energySummary = estimate(phase1);
+    core.info(`Phase 1 complete: ${phase1.length} issue(s), grade ${energySummary.grade}.`);
 
-    core.info(`Analysis complete: ${filtered.length} issue(s) found, grade ${energySummary.grade}.`);
+    // ── 5. Phase 2 — LLM semantic analysis (optional) ────────────────────
+    let llmResult = { findings: [], skipped: true, skipReason: 'LLM analysis not enabled.' };
+    if (llmEnabled) {
+      core.info(`Phase 2: Running LLM analysis with ${llmModel} at ${llmEndpoint}...`);
+      llmResult = await analyzeLLM(parsedFiles, phase1, { endpoint: llmEndpoint, model: llmModel });
+      core.info(llmResult.skipped
+        ? `Phase 2 skipped: ${llmResult.skipReason}`
+        : `Phase 2 complete: ${llmResult.findings.length} additional finding(s).`);
+    } else {
+      core.info('Phase 2: Skipped (set llm-enabled: true to activate).');
+    }
 
-    // ── 5. Post PR comment ───────────────────────────────────────────────
+    // ── 6. Phase 3 — Policy gates ────────────────────────────────────────
+    core.info('Phase 3: Evaluating policy gates...');
+    const allFindings = mergeFindings(phase1, llmResult.findings);
+    const gateResult  = evaluateGates(allFindings, energySummary, 'soft');
+    core.info(`Phase 3 complete: verdict ${gateResult.verdict} — ${gateResult.summary}`);
+
+    // ── 7. Post PR comment ───────────────────────────────────────────────
     if (pullNumber) {
       const reportBody = COMMENT_MARKER + '\n' +
-        buildMarkdownReport(filtered, energySummary, {
+        buildMarkdownReport(phase1, energySummary, {
           repoUrl:   `https://github.com/${ctx.repo.owner}/${ctx.repo.repo}`,
           prNumber:  pullNumber,
+          llmResult,
+          gateResult,
         });
 
       await upsertComment(octokit, ctx.repo.owner, ctx.repo.repo, pullNumber, reportBody);
     }
 
-    // ── 6. Set outputs ───────────────────────────────────────────────────
-    setOutputs(energySummary.score, energySummary.grade, filtered.length);
+    // ── 8. Set outputs ───────────────────────────────────────────────────
+    setOutputs(energySummary.score, energySummary.grade, allFindings.length);
 
-    // ── 7. Optionally fail ───────────────────────────────────────────────
-    if (failOnIssues && filtered.length > 0) {
+    // ── 9. Optionally fail ───────────────────────────────────────────────
+    if (failOnIssues && allFindings.length > 0) {
       core.setFailed(
-        `Green Code Analyzer found ${filtered.length} energy anti-pattern(s). ` +
-        `Grade: ${energySummary.grade}. See PR comment for details.`
+        `Green Code Analyzer found ${allFindings.length} energy issue(s). ` +
+        `Grade: ${energySummary.grade}, Verdict: ${gateResult.verdict}.`
       );
     }
 

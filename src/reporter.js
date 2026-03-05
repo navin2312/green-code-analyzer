@@ -16,9 +16,9 @@
 /**
  * Build the full GitHub PR comment markdown body.
  *
- * @param {Array}  findings   From analyzer.analyze()
- * @param {Object} estimate   From energy-estimator.estimate()
- * @param {Object} [opts]     { repoUrl, prNumber, minSeverity }
+ * @param {Array}  findings     Phase 1 findings (from analyzer.analyze())
+ * @param {Object} estimate     From energy-estimator.estimate()
+ * @param {Object} [opts]       { repoUrl, prNumber, llmResult, gateResult }
  * @returns {string}
  */
 function buildMarkdownReport(findings, estimate, opts = {}) {
@@ -28,9 +28,19 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
   const badgeUrl   = shieldsBadgeUrl(estimate.grade, estimate.color);
   const badgeMarkdown = `![Energy Grade ${estimate.grade}](${badgeUrl})`;
 
-  lines.push(`## ${estimate.emoji} Green Code Analyzer — Energy Anti-Pattern Report`);
+  // ── Final verdict banner (Phase 3) ──────────────────────────────────────
+  const gate = opts.gateResult;
+  const verdictLine = gate
+    ? `${gate.verdictEmoji} **Verdict: ${gate.verdict}** — ${gate.verdictDetail}`
+    : '';
+
+  lines.push(`## 🌿 Green Code Analyzer — Multi-Phase Energy Report`);
   lines.push('');
   lines.push(badgeMarkdown);
+  if (verdictLine) {
+    lines.push('');
+    lines.push(`> ${verdictLine}`);
+  }
   lines.push('');
 
   // ── Summary table ────────────────────────────────────────────────────────
@@ -79,8 +89,44 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
     lines.push('');
   }
 
-  // ── Findings grouped by file ─────────────────────────────────────────────
-  lines.push('### 🔍 Detailed Findings');
+  // ── Phase 2 — LLM Findings ───────────────────────────────────────────────
+  const llm = opts.llmResult;
+  lines.push('### 🤖 Phase 2 — LLM Semantic Analysis');
+  lines.push('');
+  if (!llm || llm.skipped) {
+    const reason = llm?.skipReason || 'LLM analysis not configured.';
+    lines.push(`> ℹ️ ${reason}`);
+    lines.push('> To enable: install [Ollama](https://ollama.ai), run `ollama pull codellama`, then set `llm-enabled: true` in the workflow.');
+  } else if (llm.findings.length === 0) {
+    lines.push(`> ✅ **No additional issues found** by \`${llm.model}\` — deterministic patterns covered everything.`);
+  } else {
+    lines.push(`**Model:** \`${llm.model}\` — found **${llm.findings.length}** additional issue(s) beyond pattern rules.`);
+    lines.push('');
+    for (const f of llm.findings) {
+      lines.push(`- ${severityEmoji(f.severity)} **${f.patternName}** — \`${f.filename}:${f.lineNumber}\``);
+      lines.push(`  > ${f.description}`);
+      lines.push(`  > 💡 ${f.suggestion}`);
+    }
+  }
+  lines.push('');
+
+  // ── Phase 3 — Policy Gates ───────────────────────────────────────────────
+  if (gate) {
+    lines.push('### ⚖️ Phase 3 — Policy Gates');
+    lines.push('');
+    lines.push(`| Gate | Status | Detail |`);
+    lines.push(`|------|--------|--------|`);
+    for (const r of gate.results) {
+      const icon = r.status === 'pass' ? '✅' : r.status === 'warn' ? '⚠️' : 'ℹ️';
+      lines.push(`| **${r.name}** | ${icon} ${r.status.toUpperCase()} | ${r.detail} |`);
+    }
+    lines.push('');
+    lines.push(`**Mode:** \`${gate.mode}\` (soft — warns only, never blocks) · **${gate.summary}**`);
+    lines.push('');
+  }
+
+  // ── Phase 1 — Detailed Findings ──────────────────────────────────────────
+  lines.push('### 🔍 Phase 1 — Detailed Pattern Findings');
   lines.push('');
 
   const byFile = groupBy(findings, 'filename');
@@ -143,7 +189,7 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
  * @param {Object} chalk     chalk instance
  * @returns {string}
  */
-function buildTerminalReport(findings, estimate, chalk) {
+function buildTerminalReport(findings, estimate, chalk, opts = {}) {
   const c = chalk || { bold: (s) => s, red: (s) => s, yellow: (s) => s,
     green: (s) => s, cyan: (s) => s, gray: (s) => s, white: (s) => s,
     bgRed: (s) => s };
@@ -167,26 +213,63 @@ function buildTerminalReport(findings, estimate, chalk) {
   out.push(`  Est. impact: ${estimate.savings.description}`);
   out.push('');
 
-  if (findings.length === 0) {
+  if (findings.length === 0 && !opts.llmResult?.findings?.length) {
     out.push(c.green('  ✔  No energy anti-patterns detected. Great work!'));
     out.push('');
     return out.join('\n');
   }
 
-  // Group by file
-  const byFile = groupBy(findings, 'filename');
-  for (const [file, fileFindings] of Object.entries(byFile)) {
-    out.push(c.cyan(c.bold(`  📄 ${file}`)));
-    for (const f of fileFindings) {
-      const sevColor = f.severity === 'critical' ? c.red :
-                       f.severity === 'high'     ? c.red :
-                       f.severity === 'medium'   ? c.yellow : c.gray;
+  // ── Phase 1 findings grouped by file ──────────────────────────────────────
+  if (findings.length > 0) {
+    out.push(c.bold('  ── Phase 1: Pattern Analysis ──'));
+    const byFile = groupBy(findings, 'filename');
+    for (const [file, fileFindings] of Object.entries(byFile)) {
+      out.push('');
+      out.push(c.cyan(c.bold(`  📄 ${file}`)));
+      for (const f of fileFindings) {
+        const sevColor = f.severity === 'critical' ? c.red :
+                         f.severity === 'high'     ? c.red :
+                         f.severity === 'medium'   ? c.yellow : c.gray;
+        out.push('');
+        out.push(`    ${sevColor(c.bold(`[${f.severity.toUpperCase()}]`))} ${c.bold(f.patternName)} (${f.patternId})`);
+        out.push(`    Line ${f.lineNumber}: ${c.gray(f.match.substring(0, 80))}`);
+        out.push(`    ${c.gray('→')} ${f.detail || f.description}`);
+        out.push(`    ${c.cyan('Fix:')} ${f.suggestion.split('\n')[0]}`);
+      }
+    }
+    out.push('');
+  }
+
+  // ── Phase 2 LLM findings ───────────────────────────────────────────────────
+  const llm = opts.llmResult;
+  out.push(c.bold('  ── Phase 2: LLM Semantic Analysis ──'));
+  if (!llm || llm.skipped) {
+    out.push(c.gray(`  ℹ  ${llm?.skipReason || 'Not configured — run ollama serve to enable'}`));
+  } else if (llm.findings.length === 0) {
+    out.push(c.green(`  ✔  No additional issues found by ${llm.model}`));
+  } else {
+    for (const f of llm.findings) {
+      const sevColor = f.severity === 'critical' || f.severity === 'high' ? c.red : c.yellow;
       out.push('');
       out.push(`    ${sevColor(c.bold(`[${f.severity.toUpperCase()}]`))} ${c.bold(f.patternName)} (${f.patternId})`);
-      out.push(`    Line ${f.lineNumber}: ${c.gray(f.match.substring(0, 80))}`);
-      out.push(`    ${c.gray('→')} ${f.detail || f.description}`);
-      out.push(`    ${c.cyan('Fix:')} ${f.suggestion.split('\n')[0]}`);
+      out.push(`    ${f.filename}:${f.lineNumber}`);
+      out.push(`    ${c.cyan('Fix:')} ${f.suggestion}`);
     }
+  }
+  out.push('');
+
+  // ── Phase 3 policy gates ───────────────────────────────────────────────────
+  const gate = opts.gateResult;
+  if (gate) {
+    out.push(c.bold('  ── Phase 3: Policy Gates ──'));
+    for (const r of gate.results) {
+      const icon   = r.status === 'pass' ? c.green('✔') : r.status === 'warn' ? c.yellow('⚠') : c.cyan('ℹ');
+      const detail = r.status !== 'pass' ? c.yellow(r.detail) : c.gray(r.detail);
+      out.push(`  ${icon}  ${r.name}: ${detail}`);
+    }
+    out.push('');
+    const vColor = gate.verdict === 'PASS' ? c.green : c.yellow;
+    out.push(`  ${vColor(c.bold(`Verdict: ${gate.verdictEmoji} ${gate.verdict}`))} — ${gate.verdictDetail}`);
     out.push('');
   }
 

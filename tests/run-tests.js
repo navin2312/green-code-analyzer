@@ -12,9 +12,14 @@ const { parseDiff, parseFile }    = require('../src/diff-parser');
 const { analyze }                 = require('../src/analyzer');
 const { estimate, filterBySeverity } = require('../src/energy-estimator');
 const { buildMarkdownReport, buildTerminalReport, buildJsonReport } = require('../src/reporter');
+const { evaluateGates, mergeFindings } = require('../src/policy-gates');
+const { analyzeLLM }              = require('../src/llm-analyzer');
 
 let passed = 0;
 let failed = 0;
+
+// Wrap in async main so we can await LLM tests without top-level await (CJS)
+async function main() {
 
 function assert(condition, message) {
   if (condition) {
@@ -189,9 +194,79 @@ assert(diffFindings.length > 0, `Found ${diffFindings.length} issues in sample.d
 const diffSummary  = estimate(diffFindings);
 assert(diffSummary.grade !== 'A+', `Grade is not A+ for sample.diff (got ${diffSummary.grade})`);
 
+// ─── Test: policy gates ───────────────────────────────────────────────────────
+section('policy-gates');
+
+const gateResult = evaluateGates(allFindings, summary, 'soft');
+assert(gateResult.results.length > 0,           'evaluateGates returns gate results');
+assert(['PASS','WARN'].includes(gateResult.verdict), `Verdict is PASS or WARN (got ${gateResult.verdict})`);
+assert(typeof gateResult.summary === 'string',   'Gate summary is a string');
+assert(gateResult.mode === 'soft',               'Mode is soft');
+
+// Soft mode: verdict must never be BLOCK
+assert(gateResult.verdict !== 'BLOCK',           'Soft mode never produces BLOCK verdict');
+
+// With critical findings, GATE001 should warn
+const criticalFindings = allFindings.filter(f => f.severity === 'critical');
+if (criticalFindings.length > 0) {
+  const gate001 = gateResult.results.find(r => r.id === 'GATE001');
+  assert(gate001?.status === 'warn', 'GATE001 warns when critical patterns present');
+}
+
+// Clean findings → all gates pass
+const cleanGates = evaluateGates([], estimate([]), 'soft');
+assert(cleanGates.verdict === 'PASS', 'Clean findings → PASS verdict');
+assert(cleanGates.results.every(r => r.status === 'pass'), 'Clean findings → all gates pass');
+
+// mergeFindings combines sources correctly
+const fakePatternFinding = { ...allFindings[0], source: 'pattern' };
+const fakeLlmFinding     = { ...allFindings[0], patternId: 'LLM001', source: 'llm' };
+const merged = mergeFindings([fakePatternFinding], [fakeLlmFinding]);
+assert(merged.length === 2,                      'mergeFindings returns both findings');
+assert(merged.some(f => f.source === 'llm'),     'mergeFindings preserves LLM source tag');
+assert(merged.some(f => f.source === 'pattern'), 'mergeFindings preserves pattern source tag');
+
+// ─── Test: LLM analyzer (offline / skipped) ──────────────────────────────────
+section('llm-analyzer (offline fallback)');
+
+// Without Ollama running the analyzer should gracefully skip
+const llmResult = await analyzeLLM(parsedFiles.slice(0, 1), [], {
+  endpoint: 'http://localhost:19999', // port nothing is running on
+  model:    'codellama',
+  timeout:  3000,
+});
+assert(llmResult.skipped === true,               'LLM analyzer skips gracefully when Ollama unreachable');
+assert(Array.isArray(llmResult.findings),        'LLM result always has findings array');
+assert(llmResult.findings.length === 0,          'Skipped LLM result has 0 findings');
+assert(typeof llmResult.skipReason === 'string', 'LLM result includes skipReason');
+
+// ─── Test: reporter shows 3-phase sections ────────────────────────────────────
+section('reporter — 3-phase output');
+
+const multiPhaseMarkdown = buildMarkdownReport(allFindings, summary, {
+  llmResult: { skipped: true, skipReason: 'Test mode', findings: [] },
+  gateResult,
+});
+assert(multiPhaseMarkdown.includes('Phase 2'),   'Markdown includes Phase 2 section');
+assert(multiPhaseMarkdown.includes('Phase 3'),   'Markdown includes Phase 3 section');
+assert(multiPhaseMarkdown.includes('Policy Gates'), 'Markdown includes Policy Gates table');
+assert(multiPhaseMarkdown.includes('Verdict'),   'Markdown includes Verdict');
+
+const multiPhaseTerminal = buildTerminalReport(allFindings, summary, null, {
+  llmResult: { skipped: true, skipReason: 'Test mode', findings: [] },
+  gateResult,
+});
+assert(multiPhaseTerminal.includes('Phase 1'),   'Terminal includes Phase 1 section');
+assert(multiPhaseTerminal.includes('Phase 2'),   'Terminal includes Phase 2 section');
+assert(multiPhaseTerminal.includes('Phase 3'),   'Terminal includes Phase 3 section');
+
 // ─── Results ─────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(50)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);
 console.log(`${'─'.repeat(50)}\n`);
 
 if (failed > 0) process.exit(1);
+
+} // end main()
+
+main().catch((err) => { console.error(err); process.exit(2); });

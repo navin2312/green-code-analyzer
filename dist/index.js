@@ -30308,6 +30308,267 @@ module.exports = { estimate, filterBySeverity, GRADES, SEVERITY_ORDER };
 
 /***/ }),
 
+/***/ 5021:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/**
+ * Phase 2 — LLM Semantic Analyzer (Ollama)
+ *
+ * Sends the PR diff to a locally-running Ollama instance for deeper
+ * semantic analysis that goes beyond what regex patterns can detect.
+ *
+ * Ollama must be running:  ollama serve
+ * Recommended models:      codellama, deepseek-coder, mistral, llama3
+ *
+ * Falls back gracefully (returns empty findings) if Ollama is not
+ * reachable or the model returns unparseable output.
+ */
+
+const http  = __nccwpck_require__(8611);
+const https = __nccwpck_require__(5692);
+
+// ─── Default config ──────────────────────────────────────────────────────────
+
+const DEFAULTS = {
+  endpoint: 'http://localhost:11434',
+  model:    'codellama',
+  timeout:  60000,   // 60 s — LLMs can be slow on first run
+};
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/**
+ * Run LLM semantic analysis on a list of parsed files.
+ *
+ * @param {Array}  parsedFiles   From diff-parser (only files with language set)
+ * @param {Array}  phase1Findings Already-found findings (to avoid duplicates)
+ * @param {Object} opts          { endpoint, model, timeout }
+ * @returns {Promise<{ findings, model, tokensUsed, skipped, skipReason }>}
+ */
+async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
+  const cfg = { ...DEFAULTS, ...opts };
+
+  // ── Build context ──────────────────────────────────────────────────────────
+  const diffText   = buildDiffSummary(parsedFiles);
+  const alreadyIds = [...new Set(phase1Findings.map((f) => f.patternId))].join(', ');
+
+  if (!diffText.trim()) {
+    return skip('No supported diff content to analyse');
+  }
+
+  // ── Check Ollama is reachable ──────────────────────────────────────────────
+  const alive = await pingOllama(cfg.endpoint, cfg.timeout);
+  if (!alive) {
+    return skip(`Ollama not reachable at ${cfg.endpoint} — start with: ollama serve`);
+  }
+
+  // ── Build prompt ───────────────────────────────────────────────────────────
+  const prompt = buildPrompt(diffText, alreadyIds, phase1Findings);
+
+  // ── Call Ollama ────────────────────────────────────────────────────────────
+  let raw;
+  try {
+    raw = await ollamaGenerate(cfg.endpoint, cfg.model, prompt, cfg.timeout);
+  } catch (err) {
+    return skip(`Ollama request failed: ${err.message}`);
+  }
+
+  // ── Parse response ─────────────────────────────────────────────────────────
+  const { findings, parseError } = parseResponse(raw);
+  if (parseError) {
+    return skip(`Could not parse LLM response: ${parseError}`);
+  }
+
+  return {
+    findings:   normalizeFindings(findings, parsedFiles),
+    model:      cfg.model,
+    skipped:    false,
+    skipReason: null,
+  };
+}
+
+// ─── Prompt builder ───────────────────────────────────────────────────────────
+
+function buildPrompt(diffText, alreadyDetectedIds, phase1Findings) {
+  const alreadyList = phase1Findings.length
+    ? phase1Findings.map((f) => `  - ${f.patternId}: ${f.patternName} (line ${f.lineNumber} in ${f.filename})`).join('\n')
+    : '  (none detected yet)';
+
+  return `You are an expert in energy-efficient software engineering. Your job is to find code patterns that waste CPU, memory, or network energy.
+
+Analyze the following code diff and identify energy inefficiencies.
+
+Already detected by our deterministic analyzer (DO NOT repeat these):
+${alreadyList}
+
+Look specifically for issues that pattern-matching misses:
+- Hidden O(n²) or exponential algorithmic complexity
+- Missing memoization / caching for expensive pure functions
+- Redundant recomputation of the same value across iterations
+- Inefficient data structure choices (e.g., list lookup when a set would be O(1))
+- Blocking I/O patterns that prevent parallelism
+- Memory allocation anti-patterns that increase GC pressure
+- Missed opportunities to use lazy evaluation or generators
+
+Respond ONLY with valid JSON in exactly this format (no markdown, no explanation):
+{
+  "findings": [
+    {
+      "filename": "src/example.js",
+      "line": 42,
+      "severity": "high",
+      "name": "Missing result caching",
+      "description": "One sentence: what the pattern is and why it wastes energy.",
+      "suggestion": "One sentence: how to fix it.",
+      "energyPoints": 15
+    }
+  ],
+  "summary": "One sentence overall summary."
+}
+
+Rules:
+- severity must be one of: low, medium, high, critical
+- energyPoints must be a number between 1 and 35
+- If you find no additional issues, return: { "findings": [], "summary": "No additional issues found." }
+- filename must match exactly one of the files in the diff
+- line must be a plausible line number for the issue
+
+Code diff to analyze:
+\`\`\`
+${diffText.substring(0, 6000)}
+\`\`\``;
+}
+
+// ─── Diff summary builder ─────────────────────────────────────────────────────
+
+function buildDiffSummary(parsedFiles) {
+  return parsedFiles.map((pf) => {
+    const addedLines = pf.lineInfos
+      .filter((li) => li.isAdded)
+      .map((li) => `+${li.lineNumber.toString().padStart(4)}: ${li.content}`)
+      .join('\n');
+    return `### ${pf.filename} (${pf.language})\n${addedLines}`;
+  }).join('\n\n');
+}
+
+// ─── Ollama HTTP helpers ──────────────────────────────────────────────────────
+
+function pingOllama(endpoint, timeout) {
+  return new Promise((resolve) => {
+    const url  = new URL('/api/tags', endpoint);
+    const lib  = url.protocol === 'https:' ? https : http;
+    const timer = setTimeout(() => resolve(false), Math.min(timeout, 5000));
+
+    const req = lib.get(url.toString(), (res) => {
+      clearTimeout(timer);
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => { clearTimeout(timer); resolve(false); });
+  });
+}
+
+function ollamaGenerate(endpoint, model, prompt, timeout) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ model, prompt, stream: false });
+    const url  = new URL('/api/generate', endpoint);
+    const lib  = url.protocol === 'https:' ? https : http;
+
+    const options = {
+      hostname: url.hostname,
+      port:     url.port || (url.protocol === 'https:' ? 443 : 80),
+      path:     url.pathname,
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+
+    const timer = setTimeout(() => reject(new Error('Request timed out')), timeout);
+
+    const req = lib.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        clearTimeout(timer);
+        try {
+          const parsed = JSON.parse(data);
+          resolve(parsed.response || '');
+        } catch (e) {
+          reject(new Error('Invalid JSON response from Ollama'));
+        }
+      });
+    });
+
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Response parser ──────────────────────────────────────────────────────────
+
+function parseResponse(raw) {
+  try {
+    // Strip markdown code fences if the model added them
+    const cleaned = raw
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .trim();
+
+    const obj = JSON.parse(cleaned);
+    if (!Array.isArray(obj.findings)) {
+      return { findings: [], parseError: 'Response missing "findings" array' };
+    }
+    return { findings: obj.findings, parseError: null };
+  } catch (e) {
+    // Try to extract a JSON object/array from the response
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        const obj = JSON.parse(match[0]);
+        return { findings: obj.findings || [], parseError: null };
+      } catch (_) { /* fall through */ }
+    }
+    return { findings: [], parseError: e.message };
+  }
+}
+
+// ─── Normalize findings ───────────────────────────────────────────────────────
+
+const VALID_SEVERITIES = new Set(['low', 'medium', 'high', 'critical']);
+
+function normalizeFindings(raw, parsedFiles) {
+  const validFiles = new Set(parsedFiles.map((f) => f.filename));
+
+  return raw
+    .filter((f) => f && typeof f === 'object' && f.name && f.description)
+    .map((f, i) => ({
+      patternId:    `LLM${String(i + 1).padStart(3, '0')}`,
+      patternName:  String(f.name || 'LLM Finding').substring(0, 80),
+      severity:     VALID_SEVERITIES.has(f.severity) ? f.severity : 'medium',
+      energyPoints: Math.min(35, Math.max(1, parseInt(f.energyPoints, 10) || 10)),
+      description:  String(f.description || ''),
+      suggestion:   String(f.suggestion  || ''),
+      filename:     validFiles.has(f.filename) ? f.filename : (parsedFiles[0]?.filename || 'unknown'),
+      lineNumber:   parseInt(f.line, 10) || 1,
+      match:        f.code || '',
+      detail:       String(f.description || ''),
+      source:       'llm',   // tag so reporter can distinguish
+    }));
+}
+
+// ─── Helper ───────────────────────────────────────────────────────────────────
+
+function skip(reason) {
+  return { findings: [], model: null, skipped: true, skipReason: reason };
+}
+
+module.exports = { analyzeLLM, DEFAULTS };
+
+
+/***/ }),
+
 /***/ 8311:
 /***/ ((module) => {
 
@@ -31217,6 +31478,223 @@ module.exports = { PY_PATTERNS };
 
 /***/ }),
 
+/***/ 5518:
+/***/ ((module) => {
+
+"use strict";
+
+
+/**
+ * Phase 3 — Policy Gates
+ *
+ * Deterministic rules evaluated after Phase 1 (pattern analysis) and
+ * Phase 2 (LLM analysis). In SOFT mode (default) every gate produces
+ * a WARN at worst — the PR is never blocked.
+ *
+ * Gate result:
+ *   { id, name, status: 'pass'|'warn'|'info', detail, recommendation }
+ *
+ * Final verdict:
+ *   PASS  — all gates passed
+ *   WARN  — one or more gates triggered (soft mode: always this, never BLOCK)
+ */
+
+// ─── Gate Definitions ─────────────────────────────────────────────────────────
+
+const GATES = [
+  // ── GATE001 ────────────────────────────────────────────────────────────────
+  {
+    id:   'GATE001',
+    name: 'Critical Energy Pattern',
+    description: 'One or more critical anti-patterns that cause severe energy waste were detected.',
+    check(allFindings, estimate) {
+      const criticals = allFindings.filter((f) => f.severity === 'critical');
+      if (criticals.length === 0) {
+        return pass('No critical patterns found');
+      }
+      const names = [...new Set(criticals.map((f) => f.patternName))].join(', ');
+      return warn(
+        `${criticals.length} critical pattern(s): ${names}`,
+        'Fix critical patterns before merging — they have the highest energy impact.'
+      );
+    },
+  },
+
+  // ── GATE002 ────────────────────────────────────────────────────────────────
+  {
+    id:   'GATE002',
+    name: 'Energy Score Threshold',
+    description: 'Total energy debt score across all findings.',
+    threshold: 80,
+    check(allFindings, estimate) {
+      const score = estimate.score;
+      const limit = this.threshold;
+      if (score <= limit) {
+        return pass(`Score ${score} is within the ${limit}-point threshold`);
+      }
+      return warn(
+        `Score ${score} exceeds the ${limit}-point threshold`,
+        `Reduce high and critical findings to bring the score below ${limit}.`
+      );
+    },
+  },
+
+  // ── GATE003 ────────────────────────────────────────────────────────────────
+  {
+    id:   'GATE003',
+    name: 'High Severity Count',
+    description: 'Number of high-severity issues in this PR.',
+    maxAllowed: 3,
+    check(allFindings) {
+      const highs = allFindings.filter((f) => f.severity === 'high');
+      if (highs.length < this.maxAllowed) {
+        return pass(`${highs.length} high-severity issue(s) — within limit of ${this.maxAllowed}`);
+      }
+      return warn(
+        `${highs.length} high-severity issues (limit: ${this.maxAllowed})`,
+        'Consider splitting this PR into smaller changes to keep energy impact manageable.'
+      );
+    },
+  },
+
+  // ── GATE004 ────────────────────────────────────────────────────────────────
+  {
+    id:   'GATE004',
+    name: 'Energy Grade',
+    description: 'Overall energy efficiency grade for this PR.',
+    acceptableGrades: ['A+', 'A', 'B'],
+    check(allFindings, estimate) {
+      if (this.acceptableGrades.includes(estimate.grade)) {
+        return pass(`Grade ${estimate.grade} — ${estimate.label}`);
+      }
+      return info(
+        `Grade ${estimate.grade} — ${estimate.label}`,
+        `Aim for grade B or above. Fix high and critical findings to improve the grade.`
+      );
+    },
+  },
+
+  // ── GATE005 ────────────────────────────────────────────────────────────────
+  {
+    id:   'GATE005',
+    name: 'LLM Additional Findings',
+    description: 'Extra issues found by semantic LLM analysis beyond deterministic patterns.',
+    check(allFindings) {
+      const llmFindings = allFindings.filter((f) => f.source === 'llm');
+      if (llmFindings.length === 0) {
+        return pass('No additional issues found by LLM analysis');
+      }
+      return info(
+        `LLM detected ${llmFindings.length} additional issue(s) not caught by pattern rules`,
+        'Review the LLM findings in Phase 2 — they may indicate deeper architectural issues.'
+      );
+    },
+  },
+
+  // ── GATE006 ────────────────────────────────────────────────────────────────
+  {
+    id:   'GATE006',
+    name: 'Estimated Energy Impact',
+    description: 'Estimated daily energy cost of the anti-patterns in this PR.',
+    thresholdWh: 50,
+    check(allFindings, estimate) {
+      const wh = estimate.savings?.whPerDay || 0;
+      if (wh < this.thresholdWh) {
+        return pass(`Estimated impact: ~${wh} Wh/day — within acceptable range`);
+      }
+      return warn(
+        `Estimated ~${wh} Wh/day (${estimate.savings?.co2GramsPerDay || 0} g CO₂/day) wasted`,
+        'The patterns in this PR could have significant energy impact at production scale.'
+      );
+    },
+  },
+];
+
+// ─── Evaluator ────────────────────────────────────────────────────────────────
+
+/**
+ * Evaluate all gates against the combined findings.
+ *
+ * @param {Array}  allFindings  Phase 1 + Phase 2 findings combined
+ * @param {Object} estimate     From energy-estimator
+ * @param {string} mode         'soft' (default) — warns only, never blocks
+ * @returns {{ results, verdict, summary }}
+ */
+function evaluateGates(allFindings, estimate, mode = 'soft') {
+  const results = GATES.map((gate) => {
+    try {
+      const result = gate.check(allFindings, estimate);
+      return { id: gate.id, name: gate.name, description: gate.description, ...result };
+    } catch (_) {
+      return { id: gate.id, name: gate.name, description: gate.description,
+        status: 'pass', detail: 'Gate check skipped (error)', recommendation: '' };
+    }
+  });
+
+  // In soft mode: WARN at worst (never BLOCK)
+  const hasWarn = results.some((r) => r.status === 'warn');
+  const hasInfo = results.some((r) => r.status === 'info');
+
+  let verdict, verdictEmoji, verdictDetail;
+  if (!hasWarn && !hasInfo) {
+    verdict      = 'PASS';
+    verdictEmoji = '✅';
+    verdictDetail = 'All policy gates passed. This PR looks energy-efficient!';
+  } else if (hasWarn) {
+    verdict      = 'WARN';
+    verdictEmoji = '⚠️';
+    verdictDetail = 'Some policy gates triggered. Review the warnings below before merging.';
+  } else {
+    verdict      = 'PASS';
+    verdictEmoji = '💡';
+    verdictDetail = 'No critical issues, but there are informational suggestions worth reviewing.';
+  }
+
+  const warnCount = results.filter((r) => r.status === 'warn').length;
+  const infoCount = results.filter((r) => r.status === 'info').length;
+  const passCount = results.filter((r) => r.status === 'pass').length;
+
+  return {
+    results,
+    verdict,
+    verdictEmoji,
+    verdictDetail,
+    mode,
+    summary: `${passCount} passed · ${warnCount} warnings · ${infoCount} informational`,
+  };
+}
+
+// ─── Result constructors ──────────────────────────────────────────────────────
+
+function pass(detail) {
+  return { status: 'pass', detail, recommendation: '' };
+}
+
+function warn(detail, recommendation = '') {
+  return { status: 'warn', detail, recommendation };
+}
+
+function info(detail, recommendation = '') {
+  return { status: 'info', detail, recommendation };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Merge Phase 1 and Phase 2 findings into a single array.
+ */
+function mergeFindings(phase1, phase2) {
+  return [
+    ...phase1.map((f) => ({ ...f, source: f.source || 'pattern' })),
+    ...phase2.map((f) => ({ ...f, source: 'llm' })),
+  ];
+}
+
+module.exports = { evaluateGates, mergeFindings, GATES };
+
+
+/***/ }),
+
 /***/ 3884:
 /***/ ((module) => {
 
@@ -31239,9 +31717,9 @@ module.exports = { PY_PATTERNS };
 /**
  * Build the full GitHub PR comment markdown body.
  *
- * @param {Array}  findings   From analyzer.analyze()
- * @param {Object} estimate   From energy-estimator.estimate()
- * @param {Object} [opts]     { repoUrl, prNumber, minSeverity }
+ * @param {Array}  findings     Phase 1 findings (from analyzer.analyze())
+ * @param {Object} estimate     From energy-estimator.estimate()
+ * @param {Object} [opts]       { repoUrl, prNumber, llmResult, gateResult }
  * @returns {string}
  */
 function buildMarkdownReport(findings, estimate, opts = {}) {
@@ -31251,9 +31729,19 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
   const badgeUrl   = shieldsBadgeUrl(estimate.grade, estimate.color);
   const badgeMarkdown = `![Energy Grade ${estimate.grade}](${badgeUrl})`;
 
-  lines.push(`## ${estimate.emoji} Green Code Analyzer — Energy Anti-Pattern Report`);
+  // ── Final verdict banner (Phase 3) ──────────────────────────────────────
+  const gate = opts.gateResult;
+  const verdictLine = gate
+    ? `${gate.verdictEmoji} **Verdict: ${gate.verdict}** — ${gate.verdictDetail}`
+    : '';
+
+  lines.push(`## 🌿 Green Code Analyzer — Multi-Phase Energy Report`);
   lines.push('');
   lines.push(badgeMarkdown);
+  if (verdictLine) {
+    lines.push('');
+    lines.push(`> ${verdictLine}`);
+  }
   lines.push('');
 
   // ── Summary table ────────────────────────────────────────────────────────
@@ -31302,8 +31790,44 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
     lines.push('');
   }
 
-  // ── Findings grouped by file ─────────────────────────────────────────────
-  lines.push('### 🔍 Detailed Findings');
+  // ── Phase 2 — LLM Findings ───────────────────────────────────────────────
+  const llm = opts.llmResult;
+  lines.push('### 🤖 Phase 2 — LLM Semantic Analysis');
+  lines.push('');
+  if (!llm || llm.skipped) {
+    const reason = llm?.skipReason || 'LLM analysis not configured.';
+    lines.push(`> ℹ️ ${reason}`);
+    lines.push('> To enable: install [Ollama](https://ollama.ai), run `ollama pull codellama`, then set `llm-enabled: true` in the workflow.');
+  } else if (llm.findings.length === 0) {
+    lines.push(`> ✅ **No additional issues found** by \`${llm.model}\` — deterministic patterns covered everything.`);
+  } else {
+    lines.push(`**Model:** \`${llm.model}\` — found **${llm.findings.length}** additional issue(s) beyond pattern rules.`);
+    lines.push('');
+    for (const f of llm.findings) {
+      lines.push(`- ${severityEmoji(f.severity)} **${f.patternName}** — \`${f.filename}:${f.lineNumber}\``);
+      lines.push(`  > ${f.description}`);
+      lines.push(`  > 💡 ${f.suggestion}`);
+    }
+  }
+  lines.push('');
+
+  // ── Phase 3 — Policy Gates ───────────────────────────────────────────────
+  if (gate) {
+    lines.push('### ⚖️ Phase 3 — Policy Gates');
+    lines.push('');
+    lines.push(`| Gate | Status | Detail |`);
+    lines.push(`|------|--------|--------|`);
+    for (const r of gate.results) {
+      const icon = r.status === 'pass' ? '✅' : r.status === 'warn' ? '⚠️' : 'ℹ️';
+      lines.push(`| **${r.name}** | ${icon} ${r.status.toUpperCase()} | ${r.detail} |`);
+    }
+    lines.push('');
+    lines.push(`**Mode:** \`${gate.mode}\` (soft — warns only, never blocks) · **${gate.summary}**`);
+    lines.push('');
+  }
+
+  // ── Phase 1 — Detailed Findings ──────────────────────────────────────────
+  lines.push('### 🔍 Phase 1 — Detailed Pattern Findings');
   lines.push('');
 
   const byFile = groupBy(findings, 'filename');
@@ -31366,7 +31890,7 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
  * @param {Object} chalk     chalk instance
  * @returns {string}
  */
-function buildTerminalReport(findings, estimate, chalk) {
+function buildTerminalReport(findings, estimate, chalk, opts = {}) {
   const c = chalk || { bold: (s) => s, red: (s) => s, yellow: (s) => s,
     green: (s) => s, cyan: (s) => s, gray: (s) => s, white: (s) => s,
     bgRed: (s) => s };
@@ -31390,26 +31914,63 @@ function buildTerminalReport(findings, estimate, chalk) {
   out.push(`  Est. impact: ${estimate.savings.description}`);
   out.push('');
 
-  if (findings.length === 0) {
+  if (findings.length === 0 && !opts.llmResult?.findings?.length) {
     out.push(c.green('  ✔  No energy anti-patterns detected. Great work!'));
     out.push('');
     return out.join('\n');
   }
 
-  // Group by file
-  const byFile = groupBy(findings, 'filename');
-  for (const [file, fileFindings] of Object.entries(byFile)) {
-    out.push(c.cyan(c.bold(`  📄 ${file}`)));
-    for (const f of fileFindings) {
-      const sevColor = f.severity === 'critical' ? c.red :
-                       f.severity === 'high'     ? c.red :
-                       f.severity === 'medium'   ? c.yellow : c.gray;
+  // ── Phase 1 findings grouped by file ──────────────────────────────────────
+  if (findings.length > 0) {
+    out.push(c.bold('  ── Phase 1: Pattern Analysis ──'));
+    const byFile = groupBy(findings, 'filename');
+    for (const [file, fileFindings] of Object.entries(byFile)) {
+      out.push('');
+      out.push(c.cyan(c.bold(`  📄 ${file}`)));
+      for (const f of fileFindings) {
+        const sevColor = f.severity === 'critical' ? c.red :
+                         f.severity === 'high'     ? c.red :
+                         f.severity === 'medium'   ? c.yellow : c.gray;
+        out.push('');
+        out.push(`    ${sevColor(c.bold(`[${f.severity.toUpperCase()}]`))} ${c.bold(f.patternName)} (${f.patternId})`);
+        out.push(`    Line ${f.lineNumber}: ${c.gray(f.match.substring(0, 80))}`);
+        out.push(`    ${c.gray('→')} ${f.detail || f.description}`);
+        out.push(`    ${c.cyan('Fix:')} ${f.suggestion.split('\n')[0]}`);
+      }
+    }
+    out.push('');
+  }
+
+  // ── Phase 2 LLM findings ───────────────────────────────────────────────────
+  const llm = opts.llmResult;
+  out.push(c.bold('  ── Phase 2: LLM Semantic Analysis ──'));
+  if (!llm || llm.skipped) {
+    out.push(c.gray(`  ℹ  ${llm?.skipReason || 'Not configured — run ollama serve to enable'}`));
+  } else if (llm.findings.length === 0) {
+    out.push(c.green(`  ✔  No additional issues found by ${llm.model}`));
+  } else {
+    for (const f of llm.findings) {
+      const sevColor = f.severity === 'critical' || f.severity === 'high' ? c.red : c.yellow;
       out.push('');
       out.push(`    ${sevColor(c.bold(`[${f.severity.toUpperCase()}]`))} ${c.bold(f.patternName)} (${f.patternId})`);
-      out.push(`    Line ${f.lineNumber}: ${c.gray(f.match.substring(0, 80))}`);
-      out.push(`    ${c.gray('→')} ${f.detail || f.description}`);
-      out.push(`    ${c.cyan('Fix:')} ${f.suggestion.split('\n')[0]}`);
+      out.push(`    ${f.filename}:${f.lineNumber}`);
+      out.push(`    ${c.cyan('Fix:')} ${f.suggestion}`);
     }
+  }
+  out.push('');
+
+  // ── Phase 3 policy gates ───────────────────────────────────────────────────
+  const gate = opts.gateResult;
+  if (gate) {
+    out.push(c.bold('  ── Phase 3: Policy Gates ──'));
+    for (const r of gate.results) {
+      const icon   = r.status === 'pass' ? c.green('✔') : r.status === 'warn' ? c.yellow('⚠') : c.cyan('ℹ');
+      const detail = r.status !== 'pass' ? c.yellow(r.detail) : c.gray(r.detail);
+      out.push(`  ${icon}  ${r.name}: ${detail}`);
+    }
+    out.push('');
+    const vColor = gate.verdict === 'PASS' ? c.green : c.yellow;
+    out.push(`  ${vColor(c.bold(`Verdict: ${gate.verdictEmoji} ${gate.verdict}`))} — ${gate.verdictDetail}`);
     out.push('');
   }
 
@@ -33393,17 +33954,15 @@ var __webpack_exports__ = {};
 /**
  * GitHub Action entry point.
  *
- * This file is compiled by `npm run build` into dist/index.js using @vercel/ncc,
- * which bundles all dependencies into a single file.
- *
- * Flow:
- *   1. Read inputs (github-token, fail-on-issues, severity-threshold)
- *   2. Detect event context (pull_request or push)
+ * Multi-phase flow:
+ *   1. Read inputs
+ *   2. Detect PR / push context
  *   3. Fetch the diff from GitHub API
- *   4. Parse + analyse the diff
- *   5. Post (or update) a PR comment with the markdown report
- *   6. Set action outputs (energy-score, grade, findings-count)
- *   7. Optionally fail the action if issues were found
+ *   4. Phase 1 — Deterministic pattern analysis (24 rules)
+ *   5. Phase 2 — LLM semantic analysis via Ollama (optional)
+ *   6. Phase 3 — Policy gate evaluation (soft mode)
+ *   7. Post / update PR comment with full 3-phase report
+ *   8. Set action outputs and optionally fail
  */
 
 const core   = __nccwpck_require__(7484);
@@ -33412,6 +33971,8 @@ const github = __nccwpck_require__(3228);
 const { parseDiff }                  = __nccwpck_require__(160);
 const { analyze }                    = __nccwpck_require__(8439);
 const { estimate, filterBySeverity } = __nccwpck_require__(5670);
+const { analyzeLLM }                 = __nccwpck_require__(5021);
+const { evaluateGates, mergeFindings } = __nccwpck_require__(5518);
 const { buildMarkdownReport }        = __nccwpck_require__(3884);
 
 // Marker so we can find and update our own previous comment
@@ -33421,8 +33982,11 @@ async function run() {
   try {
     // ── 1. Read inputs ────────────────────────────────────────────────────
     const token          = core.getInput('github-token', { required: true });
-    const failOnIssues   = core.getInput('fail-on-issues')      === 'true';
-    const severityThresh = core.getInput('severity-threshold')  || 'low';
+    const failOnIssues   = core.getInput('fail-on-issues')     === 'true';
+    const severityThresh = core.getInput('severity-threshold') || 'low';
+    const llmEnabled     = core.getInput('llm-enabled')        === 'true';
+    const llmEndpoint    = core.getInput('llm-endpoint')       || 'http://localhost:11434';
+    const llmModel       = core.getInput('llm-model')          || 'codellama';
 
     const octokit = github.getOctokit(token);
     const ctx     = github.context;
@@ -33477,37 +34041,55 @@ async function run() {
       return;
     }
 
-    // ── 4. Parse + analyse ───────────────────────────────────────────────
-    core.info('Parsing diff...');
-    const parsedFiles = parseDiff(diffContent).filter((f) => f.language);
-
+    // ── 4. Phase 1 — Deterministic pattern analysis ───────────────────────
+    core.info('Phase 1: Running deterministic pattern analysis...');
+    const parsedFiles   = parseDiff(diffContent).filter((f) => f.language);
     core.info(`Found ${parsedFiles.length} supported file(s) in the diff.`);
 
-    const allFindings   = analyze(parsedFiles);
-    const filtered      = filterBySeverity(allFindings, severityThresh);
-    const energySummary = estimate(filtered);
+    const phase1All     = analyze(parsedFiles);
+    const phase1        = filterBySeverity(phase1All, severityThresh);
+    const energySummary = estimate(phase1);
+    core.info(`Phase 1 complete: ${phase1.length} issue(s), grade ${energySummary.grade}.`);
 
-    core.info(`Analysis complete: ${filtered.length} issue(s) found, grade ${energySummary.grade}.`);
+    // ── 5. Phase 2 — LLM semantic analysis (optional) ────────────────────
+    let llmResult = { findings: [], skipped: true, skipReason: 'LLM analysis not enabled.' };
+    if (llmEnabled) {
+      core.info(`Phase 2: Running LLM analysis with ${llmModel} at ${llmEndpoint}...`);
+      llmResult = await analyzeLLM(parsedFiles, phase1, { endpoint: llmEndpoint, model: llmModel });
+      core.info(llmResult.skipped
+        ? `Phase 2 skipped: ${llmResult.skipReason}`
+        : `Phase 2 complete: ${llmResult.findings.length} additional finding(s).`);
+    } else {
+      core.info('Phase 2: Skipped (set llm-enabled: true to activate).');
+    }
 
-    // ── 5. Post PR comment ───────────────────────────────────────────────
+    // ── 6. Phase 3 — Policy gates ────────────────────────────────────────
+    core.info('Phase 3: Evaluating policy gates...');
+    const allFindings = mergeFindings(phase1, llmResult.findings);
+    const gateResult  = evaluateGates(allFindings, energySummary, 'soft');
+    core.info(`Phase 3 complete: verdict ${gateResult.verdict} — ${gateResult.summary}`);
+
+    // ── 7. Post PR comment ───────────────────────────────────────────────
     if (pullNumber) {
       const reportBody = COMMENT_MARKER + '\n' +
-        buildMarkdownReport(filtered, energySummary, {
+        buildMarkdownReport(phase1, energySummary, {
           repoUrl:   `https://github.com/${ctx.repo.owner}/${ctx.repo.repo}`,
           prNumber:  pullNumber,
+          llmResult,
+          gateResult,
         });
 
       await upsertComment(octokit, ctx.repo.owner, ctx.repo.repo, pullNumber, reportBody);
     }
 
-    // ── 6. Set outputs ───────────────────────────────────────────────────
-    setOutputs(energySummary.score, energySummary.grade, filtered.length);
+    // ── 8. Set outputs ───────────────────────────────────────────────────
+    setOutputs(energySummary.score, energySummary.grade, allFindings.length);
 
-    // ── 7. Optionally fail ───────────────────────────────────────────────
-    if (failOnIssues && filtered.length > 0) {
+    // ── 9. Optionally fail ───────────────────────────────────────────────
+    if (failOnIssues && allFindings.length > 0) {
       core.setFailed(
-        `Green Code Analyzer found ${filtered.length} energy anti-pattern(s). ` +
-        `Grade: ${energySummary.grade}. See PR comment for details.`
+        `Green Code Analyzer found ${allFindings.length} energy issue(s). ` +
+        `Grade: ${energySummary.grade}, Verdict: ${gateResult.verdict}.`
       );
     }
 

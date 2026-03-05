@@ -24,9 +24,11 @@ const path    = require('path');
 const { execSync } = require('child_process');
 const { program } = require('commander');
 
-const { parseDiff, parseFile }   = require('./src/diff-parser');
-const { analyze }                = require('./src/analyzer');
+const { parseDiff, parseFile }     = require('./src/diff-parser');
+const { analyze }                  = require('./src/analyzer');
 const { estimate, filterBySeverity } = require('./src/energy-estimator');
+const { analyzeLLM }               = require('./src/llm-analyzer');
+const { evaluateGates, mergeFindings } = require('./src/policy-gates');
 const { buildMarkdownReport, buildTerminalReport, buildJsonReport } = require('./src/reporter');
 
 // ─── Version ────────────────────────────────────────────────────────────────
@@ -51,6 +53,9 @@ program
   .option('--severity <level>',    'Minimum severity: low | medium | high | critical', 'low')
   .option('--fail-on-issues',      'Exit with code 1 if any issues are found', false)
   .option('--no-color',            'Disable coloured terminal output')
+  .option('--llm',                 'Enable Phase 2 LLM semantic analysis via Ollama', false)
+  .option('--llm-endpoint <url>',  'Ollama endpoint URL', 'http://localhost:11434')
+  .option('--llm-model <model>',   'Ollama model to use', 'codellama')
   .action(async (files, opts) => {
     try {
       const parsedFiles = await collectInputs(files, opts);
@@ -60,13 +65,31 @@ program
         process.exit(1);
       }
 
-      const allFindings = analyze(parsedFiles);
-      const filtered    = filterBySeverity(allFindings, opts.severity);
-      const energySummary = estimate(filtered);
+      // Phase 1 — deterministic patterns
+      const phase1All     = analyze(parsedFiles);
+      const phase1        = filterBySeverity(phase1All, opts.severity);
+      const energySummary = estimate(phase1);
 
-      output(filtered, energySummary, opts);
+      // Phase 2 — LLM semantic analysis (optional)
+      let llmResult = { findings: [], skipped: true, skipReason: 'LLM not enabled. Use --llm to activate.' };
+      if (opts.llm) {
+        console.error(`  🤖 Running LLM analysis with ${opts.llmModel}...`);
+        llmResult = await analyzeLLM(parsedFiles, phase1, {
+          endpoint: opts.llmEndpoint,
+          model:    opts.llmModel,
+        });
+        if (llmResult.skipped) {
+          console.error(`  ⚠  LLM skipped: ${llmResult.skipReason}`);
+        }
+      }
 
-      if (opts.failOnIssues && filtered.length > 0) {
+      // Phase 3 — policy gates
+      const allFindings = mergeFindings(phase1, llmResult.findings);
+      const gateResult  = evaluateGates(allFindings, energySummary, 'soft');
+
+      output(phase1, energySummary, opts, { llmResult, gateResult });
+
+      if (opts.failOnIssues && allFindings.length > 0) {
         process.exit(1);
       }
     } catch (err) {
@@ -166,14 +189,14 @@ async function collectInputs(files, opts) {
 
 // ─── Output ──────────────────────────────────────────────────────────────────
 
-function output(findings, energySummary, opts) {
+function output(findings, energySummary, opts, phaseOpts = {}) {
   switch (opts.format) {
     case 'json':
       console.log(buildJsonReport(findings, energySummary));
       break;
 
     case 'markdown':
-      console.log(buildMarkdownReport(findings, energySummary));
+      console.log(buildMarkdownReport(findings, energySummary, phaseOpts));
       break;
 
     case 'text':
@@ -182,7 +205,7 @@ function output(findings, energySummary, opts) {
       if (opts.color !== false) {
         try { chalk = require('chalk'); } catch (_) { /* chalk not installed */ }
       }
-      console.log(buildTerminalReport(findings, energySummary, chalk));
+      console.log(buildTerminalReport(findings, energySummary, chalk, phaseOpts));
       break;
     }
   }
