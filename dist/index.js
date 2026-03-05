@@ -1,4 +1,4 @@
-require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
+/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 4914:
@@ -30334,7 +30334,7 @@ const DEFAULTS = {
   model:      'codellama',
   timeout:    60000,
   groqApiKey: null,
-  groqModel:  'llama3-8b-8192',
+  groqModel:  'llama-3.1-8b-instant',
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -34229,4 +34229,3 @@ run();
 module.exports = __webpack_exports__;
 /******/ })()
 ;
-//# sourceMappingURL=index.js.map

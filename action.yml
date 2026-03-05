@@ -43,7 +43,7 @@ inputs:
   groq-api-key:
     description: >
       Groq API key for cloud LLM analysis (free tier available at console.groq.com).
-      When set, Phase 2 is automatically enabled using llama3-8b-8192.
+      When set, Phase 2 is automatically enabled using llama-3.1-8b-instant.
       Store as a GitHub Secret: secrets.GROQ_API_KEY
     required: false
     default: ''

@@ -20,7 +20,7 @@ const DEFAULTS = {
   model:      'codellama',
   timeout:    60000,
   groqApiKey: null,
-  groqModel:  'llama3-8b-8192',
+  groqModel:  'llama-3.1-8b-instant',
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────────
