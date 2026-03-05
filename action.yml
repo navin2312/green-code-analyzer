@@ -51,7 +51,7 @@ inputs:
   llm-endpoint:
     description: >
       URL of the Ollama API endpoint (local fallback, no API key needed).
-      Only used if neither groq-api-key nor anthropic-api-key is set.
+      Only used if groq-api-key is not set.
     required: false
     default: 'http://localhost:11434'
 
