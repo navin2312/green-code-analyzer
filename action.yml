@@ -48,14 +48,6 @@ inputs:
     required: false
     default: ''
 
-  anthropic-api-key:
-    description: >
-      Anthropic API key for cloud LLM analysis using Claude.
-      Used if groq-api-key is not set. Phase 2 auto-enabled when provided.
-      Store as a GitHub Secret: secrets.ANTHROPIC_API_KEY
-    required: false
-    default: ''
-
   llm-endpoint:
     description: >
       URL of the Ollama API endpoint (local fallback, no API key needed).

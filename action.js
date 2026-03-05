@@ -33,9 +33,8 @@ async function run() {
     const token          = core.getInput('github-token', { required: true });
     const failOnIssues   = core.getInput('fail-on-issues')     === 'true';
     const severityThresh = core.getInput('severity-threshold') || 'low';
-    const groqApiKey     = core.getInput('groq-api-key')       || '';
-    const anthropicApiKey = core.getInput('anthropic-api-key') || '';
-    const llmEnabled     = core.getInput('llm-enabled') === 'true' || !!groqApiKey || !!anthropicApiKey;
+    const groqApiKey     = core.getInput('groq-api-key') || '';
+    const llmEnabled     = core.getInput('llm-enabled') === 'true' || !!groqApiKey;
     const llmEndpoint    = core.getInput('llm-endpoint')       || 'http://localhost:11434';
     const llmModel       = core.getInput('llm-model')          || 'codellama';
 
@@ -105,13 +104,12 @@ async function run() {
     // ── 5. Phase 2 — LLM semantic analysis (optional) ────────────────────
     let llmResult = { findings: [], skipped: true, skipReason: 'LLM analysis not enabled.' };
     if (llmEnabled) {
-      const backend = groqApiKey ? 'Groq' : anthropicApiKey ? 'Anthropic' : `Ollama (${llmEndpoint})`;
+      const backend = groqApiKey ? 'Groq' : `Ollama (${llmEndpoint})`;
       core.info(`Phase 2: Running LLM analysis via ${backend}...`);
       llmResult = await analyzeLLM(parsedFiles, phase1, {
-        endpoint:        llmEndpoint,
-        model:           llmModel,
-        groqApiKey:      groqApiKey || null,
-        anthropicApiKey: anthropicApiKey || null,
+        endpoint:   llmEndpoint,
+        model:      llmModel,
+        groqApiKey: groqApiKey || null,
       });
       core.info(llmResult.skipped
         ? `Phase 2 skipped: ${llmResult.skipReason}`

@@ -30317,10 +30317,9 @@ module.exports = { estimate, filterBySeverity, GRADES, SEVERITY_ORDER };
 /**
  * Phase 2 — LLM Semantic Analyzer
  *
- * Supports three backends in priority order:
- *   1. Groq API  (cloud, free tier) — set groqApiKey opt
- *   2. Anthropic API (cloud)        — set anthropicApiKey opt
- *   3. Ollama   (local)             — set llm-endpoint or use default localhost
+ * Supports two backends in priority order:
+ *   1. Groq API (cloud, free tier) — set groqApiKey opt
+ *   2. Ollama   (local)            — set llm-endpoint or use default localhost
  *
  * Falls back gracefully (returns empty findings) if none are reachable.
  */
@@ -30331,13 +30330,11 @@ const https = __nccwpck_require__(5692);
 // ─── Default config ──────────────────────────────────────────────────────────
 
 const DEFAULTS = {
-  endpoint:        'http://localhost:11434',
-  model:           'codellama',
-  timeout:         60000,
-  groqApiKey:      null,
-  anthropicApiKey: null,
-  groqModel:       'llama3-8b-8192',
-  anthropicModel:  'claude-haiku-4-5-20251001',
+  endpoint:   'http://localhost:11434',
+  model:      'codellama',
+  timeout:    60000,
+  groqApiKey: null,
+  groqModel:  'llama3-8b-8192',
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -30360,13 +30357,9 @@ async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
 
   const prompt = buildPrompt(diffText, phase1Findings);
 
-  // Priority: Groq → Anthropic → Ollama → skip
+  // Priority: Groq → Ollama → skip
   if (cfg.groqApiKey) {
     return callGroq(cfg, prompt, parsedFiles);
-  }
-
-  if (cfg.anthropicApiKey) {
-    return callAnthropic(cfg, prompt, parsedFiles);
   }
 
   return callOllama(cfg, prompt, parsedFiles);
@@ -30388,27 +30381,6 @@ async function callGroq(cfg, prompt, parsedFiles) {
   return {
     findings:   normalizeFindings(findings, parsedFiles),
     model:      `groq/${cfg.groqModel}`,
-    skipped:    false,
-    skipReason: null,
-  };
-}
-
-// ─── Backend: Anthropic (Claude) ─────────────────────────────────────────────
-
-async function callAnthropic(cfg, prompt, parsedFiles) {
-  let raw;
-  try {
-    raw = await anthropicGenerate(cfg.anthropicApiKey, cfg.anthropicModel, prompt, cfg.timeout);
-  } catch (err) {
-    return skip(`Anthropic API request failed: ${err.message}`);
-  }
-
-  const { findings, parseError } = parseResponse(raw);
-  if (parseError) return skip(`Could not parse Anthropic response: ${parseError}`);
-
-  return {
-    findings:   normalizeFindings(findings, parsedFiles),
-    model:      `anthropic/${cfg.anthropicModel}`,
     skipped:    false,
     skipReason: null,
   };
@@ -30540,52 +30512,6 @@ function groqGenerate(apiKey, model, prompt, timeout) {
           resolve(parsed.choices?.[0]?.message?.content || '');
         } catch (e) {
           reject(new Error('Invalid JSON response from Groq'));
-        }
-      });
-    });
-
-    req.on('error', (e) => { clearTimeout(timer); reject(e); });
-    req.write(body);
-    req.end();
-  });
-}
-
-// ─── Anthropic HTTP helper ────────────────────────────────────────────────────
-
-function anthropicGenerate(apiKey, model, prompt, timeout) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      model,
-      max_tokens: 1500,
-      messages:   [{ role: 'user', content: prompt }],
-    });
-
-    const options = {
-      hostname: 'api.anthropic.com',
-      port:     443,
-      path:     '/v1/messages',
-      method:   'POST',
-      headers:  {
-        'Content-Type':      'application/json',
-        'x-api-key':         apiKey,
-        'anthropic-version': '2023-06-01',
-        'Content-Length':    Buffer.byteLength(body),
-      },
-    };
-
-    const timer = setTimeout(() => reject(new Error('Request timed out')), timeout);
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        clearTimeout(timer);
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(parsed.error.message || 'Anthropic API error'));
-          resolve(parsed.content?.[0]?.text || '');
-        } catch (e) {
-          reject(new Error('Invalid JSON response from Anthropic'));
         }
       });
     });
@@ -34124,9 +34050,8 @@ async function run() {
     const token          = core.getInput('github-token', { required: true });
     const failOnIssues   = core.getInput('fail-on-issues')     === 'true';
     const severityThresh = core.getInput('severity-threshold') || 'low';
-    const groqApiKey     = core.getInput('groq-api-key')       || '';
-    const anthropicApiKey = core.getInput('anthropic-api-key') || '';
-    const llmEnabled     = core.getInput('llm-enabled') === 'true' || !!groqApiKey || !!anthropicApiKey;
+    const groqApiKey     = core.getInput('groq-api-key') || '';
+    const llmEnabled     = core.getInput('llm-enabled') === 'true' || !!groqApiKey;
     const llmEndpoint    = core.getInput('llm-endpoint')       || 'http://localhost:11434';
     const llmModel       = core.getInput('llm-model')          || 'codellama';
 
@@ -34196,13 +34121,12 @@ async function run() {
     // ── 5. Phase 2 — LLM semantic analysis (optional) ────────────────────
     let llmResult = { findings: [], skipped: true, skipReason: 'LLM analysis not enabled.' };
     if (llmEnabled) {
-      const backend = groqApiKey ? 'Groq' : anthropicApiKey ? 'Anthropic' : `Ollama (${llmEndpoint})`;
+      const backend = groqApiKey ? 'Groq' : `Ollama (${llmEndpoint})`;
       core.info(`Phase 2: Running LLM analysis via ${backend}...`);
       llmResult = await analyzeLLM(parsedFiles, phase1, {
-        endpoint:        llmEndpoint,
-        model:           llmModel,
-        groqApiKey:      groqApiKey || null,
-        anthropicApiKey: anthropicApiKey || null,
+        endpoint:   llmEndpoint,
+        model:      llmModel,
+        groqApiKey: groqApiKey || null,
       });
       core.info(llmResult.skipped
         ? `Phase 2 skipped: ${llmResult.skipReason}`

@@ -57,7 +57,6 @@ program
   .option('--llm-endpoint <url>',      'Ollama endpoint URL (local fallback)', 'http://localhost:11434')
   .option('--llm-model <model>',       'Ollama model to use (local fallback)', 'codellama')
   .option('--groq-api-key <key>',      'Groq API key for cloud LLM (or set GROQ_API_KEY env var)')
-  .option('--anthropic-api-key <key>', 'Anthropic API key for cloud LLM (or set ANTHROPIC_API_KEY env var)')
   .action(async (files, opts) => {
     try {
       const parsedFiles = await collectInputs(files, opts);
@@ -73,19 +72,17 @@ program
       const energySummary = estimate(phase1);
 
       // Phase 2 — LLM semantic analysis (optional)
-      const groqKey      = opts.groqApiKey      || process.env.GROQ_API_KEY      || '';
-      const anthropicKey = opts.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '';
-      const llmActive    = opts.llm || !!groqKey || !!anthropicKey;
+      const groqKey   = opts.groqApiKey || process.env.GROQ_API_KEY || '';
+      const llmActive = opts.llm || !!groqKey;
 
-      let llmResult = { findings: [], skipped: true, skipReason: 'LLM not enabled. Use --llm, --groq-api-key, or set GROQ_API_KEY env var.' };
+      let llmResult = { findings: [], skipped: true, skipReason: 'LLM not enabled. Use --llm or --groq-api-key (or set GROQ_API_KEY env var).' };
       if (llmActive) {
-        const backend = groqKey ? 'Groq' : anthropicKey ? 'Anthropic' : opts.llmModel;
+        const backend = groqKey ? 'Groq' : opts.llmModel;
         console.error(`  Running LLM analysis via ${backend}...`);
         llmResult = await analyzeLLM(parsedFiles, phase1, {
-          endpoint:        opts.llmEndpoint,
-          model:           opts.llmModel,
-          groqApiKey:      groqKey || null,
-          anthropicApiKey: anthropicKey || null,
+          endpoint:   opts.llmEndpoint,
+          model:      opts.llmModel,
+          groqApiKey: groqKey || null,
         });
         if (llmResult.skipped) {
           console.error(`  ⚠  LLM skipped: ${llmResult.skipReason}`);
