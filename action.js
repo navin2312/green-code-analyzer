@@ -61,24 +61,23 @@ async function run() {
 
     if (pullNumber) {
       core.info(`Fetching diff for PR #${pullNumber}...`);
-      const { data } = await octokit.rest.pulls.get({
-        owner:      ctx.repo.owner,
-        repo:       ctx.repo.repo,
+      const response = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+        owner:       ctx.repo.owner,
+        repo:        ctx.repo.repo,
         pull_number: pullNumber,
-        mediaType:  { format: 'diff' },
+        headers:     { accept: 'application/vnd.github.v3.diff' },
       });
-      diffContent = data;
+      diffContent = response.data;
     } else if (ctx.eventName === 'push' && ctx.payload.before) {
       // Compare base..head for a push event
       core.info('Fetching diff for push event...');
-      const { data } = await octokit.rest.repos.compareCommits({
-        owner: ctx.repo.owner,
-        repo:  ctx.repo.repo,
-        base:  ctx.payload.before,
-        head:  ctx.payload.after,
-        mediaType: { format: 'diff' },
+      const response = await octokit.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+        owner:    ctx.repo.owner,
+        repo:     ctx.repo.repo,
+        basehead: `${ctx.payload.before}...${ctx.payload.after}`,
+        headers:  { accept: 'application/vnd.github.v3.diff' },
       });
-      diffContent = data;
+      diffContent = response.data;
     } else {
       core.warning('No pull request or push diff found. Skipping analysis.');
       setOutputs(0, 'A+', 0);
