@@ -35,23 +35,38 @@ inputs:
 
   llm-enabled:
     description: >
-      Set to 'true' to enable Phase 2 LLM semantic analysis via Ollama.
-      Requires Ollama running on a self-hosted runner or accessible endpoint.
+      Set to 'true' to enable Phase 2 LLM semantic analysis.
+      Auto-enabled if groq-api-key or anthropic-api-key is provided.
     required: false
     default: 'false'
 
+  groq-api-key:
+    description: >
+      Groq API key for cloud LLM analysis (free tier available at console.groq.com).
+      When set, Phase 2 is automatically enabled using llama3-8b-8192.
+      Store as a GitHub Secret: secrets.GROQ_API_KEY
+    required: false
+    default: ''
+
+  anthropic-api-key:
+    description: >
+      Anthropic API key for cloud LLM analysis using Claude.
+      Used if groq-api-key is not set. Phase 2 auto-enabled when provided.
+      Store as a GitHub Secret: secrets.ANTHROPIC_API_KEY
+    required: false
+    default: ''
+
   llm-endpoint:
     description: >
-      URL of the Ollama API endpoint.
-      Default is localhost — override if Ollama runs on a different host.
+      URL of the Ollama API endpoint (local fallback, no API key needed).
+      Only used if neither groq-api-key nor anthropic-api-key is set.
     required: false
     default: 'http://localhost:11434'
 
   llm-model:
     description: >
-      Ollama model to use for semantic analysis.
+      Ollama model to use for semantic analysis (local fallback only).
       Recommended: codellama, deepseek-coder, mistral, llama3.
-      The model must already be pulled: ollama pull <model>
     required: false
     default: 'codellama'
 

@@ -1,16 +1,14 @@
 'use strict';
 
 /**
- * Phase 2 — LLM Semantic Analyzer (Ollama)
+ * Phase 2 — LLM Semantic Analyzer
  *
- * Sends the PR diff to a locally-running Ollama instance for deeper
- * semantic analysis that goes beyond what regex patterns can detect.
+ * Supports three backends in priority order:
+ *   1. Groq API  (cloud, free tier) — set groqApiKey opt
+ *   2. Anthropic API (cloud)        — set anthropicApiKey opt
+ *   3. Ollama   (local)             — set llm-endpoint or use default localhost
  *
- * Ollama must be running:  ollama serve
- * Recommended models:      codellama, deepseek-coder, mistral, llama3
- *
- * Falls back gracefully (returns empty findings) if Ollama is not
- * reachable or the model returns unparseable output.
+ * Falls back gracefully (returns empty findings) if none are reachable.
  */
 
 const http  = require('http');
@@ -19,9 +17,13 @@ const https = require('https');
 // ─── Default config ──────────────────────────────────────────────────────────
 
 const DEFAULTS = {
-  endpoint: 'http://localhost:11434',
-  model:    'codellama',
-  timeout:  60000,   // 60 s — LLMs can be slow on first run
+  endpoint:        'http://localhost:11434',
+  model:           'codellama',
+  timeout:         60000,
+  groqApiKey:      null,
+  anthropicApiKey: null,
+  groqModel:       'llama3-8b-8192',
+  anthropicModel:  'claude-haiku-4-5-20251001',
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -29,32 +31,83 @@ const DEFAULTS = {
 /**
  * Run LLM semantic analysis on a list of parsed files.
  *
- * @param {Array}  parsedFiles   From diff-parser (only files with language set)
- * @param {Array}  phase1Findings Already-found findings (to avoid duplicates)
- * @param {Object} opts          { endpoint, model, timeout }
- * @returns {Promise<{ findings, model, tokensUsed, skipped, skipReason }>}
+ * @param {Array}  parsedFiles     From diff-parser (only files with language set)
+ * @param {Array}  phase1Findings  Already-found findings (to avoid duplicates)
+ * @param {Object} opts            { endpoint, model, timeout, groqApiKey, anthropicApiKey }
+ * @returns {Promise<{ findings, model, skipped, skipReason }>}
  */
 async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
   const cfg = { ...DEFAULTS, ...opts };
 
-  // ── Build context ──────────────────────────────────────────────────────────
-  const diffText   = buildDiffSummary(parsedFiles);
-  const alreadyIds = [...new Set(phase1Findings.map((f) => f.patternId))].join(', ');
-
+  const diffText = buildDiffSummary(parsedFiles);
   if (!diffText.trim()) {
     return skip('No supported diff content to analyse');
   }
 
-  // ── Check Ollama is reachable ──────────────────────────────────────────────
+  const prompt = buildPrompt(diffText, phase1Findings);
+
+  // Priority: Groq → Anthropic → Ollama → skip
+  if (cfg.groqApiKey) {
+    return callGroq(cfg, prompt, parsedFiles);
+  }
+
+  if (cfg.anthropicApiKey) {
+    return callAnthropic(cfg, prompt, parsedFiles);
+  }
+
+  return callOllama(cfg, prompt, parsedFiles);
+}
+
+// ─── Backend: Groq (OpenAI-compatible, free tier) ────────────────────────────
+
+async function callGroq(cfg, prompt, parsedFiles) {
+  let raw;
+  try {
+    raw = await groqGenerate(cfg.groqApiKey, cfg.groqModel, prompt, cfg.timeout);
+  } catch (err) {
+    return skip(`Groq API request failed: ${err.message}`);
+  }
+
+  const { findings, parseError } = parseResponse(raw);
+  if (parseError) return skip(`Could not parse Groq response: ${parseError}`);
+
+  return {
+    findings:   normalizeFindings(findings, parsedFiles),
+    model:      `groq/${cfg.groqModel}`,
+    skipped:    false,
+    skipReason: null,
+  };
+}
+
+// ─── Backend: Anthropic (Claude) ─────────────────────────────────────────────
+
+async function callAnthropic(cfg, prompt, parsedFiles) {
+  let raw;
+  try {
+    raw = await anthropicGenerate(cfg.anthropicApiKey, cfg.anthropicModel, prompt, cfg.timeout);
+  } catch (err) {
+    return skip(`Anthropic API request failed: ${err.message}`);
+  }
+
+  const { findings, parseError } = parseResponse(raw);
+  if (parseError) return skip(`Could not parse Anthropic response: ${parseError}`);
+
+  return {
+    findings:   normalizeFindings(findings, parsedFiles),
+    model:      `anthropic/${cfg.anthropicModel}`,
+    skipped:    false,
+    skipReason: null,
+  };
+}
+
+// ─── Backend: Ollama (local) ──────────────────────────────────────────────────
+
+async function callOllama(cfg, prompt, parsedFiles) {
   const alive = await pingOllama(cfg.endpoint, cfg.timeout);
   if (!alive) {
     return skip(`Ollama not reachable at ${cfg.endpoint} — start with: ollama serve`);
   }
 
-  // ── Build prompt ───────────────────────────────────────────────────────────
-  const prompt = buildPrompt(diffText, alreadyIds, phase1Findings);
-
-  // ── Call Ollama ────────────────────────────────────────────────────────────
   let raw;
   try {
     raw = await ollamaGenerate(cfg.endpoint, cfg.model, prompt, cfg.timeout);
@@ -62,11 +115,8 @@ async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
     return skip(`Ollama request failed: ${err.message}`);
   }
 
-  // ── Parse response ─────────────────────────────────────────────────────────
   const { findings, parseError } = parseResponse(raw);
-  if (parseError) {
-    return skip(`Could not parse LLM response: ${parseError}`);
-  }
+  if (parseError) return skip(`Could not parse LLM response: ${parseError}`);
 
   return {
     findings:   normalizeFindings(findings, parsedFiles),
@@ -78,7 +128,7 @@ async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
-function buildPrompt(diffText, alreadyDetectedIds, phase1Findings) {
+function buildPrompt(diffText, phase1Findings) {
   const alreadyList = phase1Findings.length
     ? phase1Findings.map((f) => `  - ${f.patternId}: ${f.patternName} (line ${f.lineNumber} in ${f.filename})`).join('\n')
     : '  (none detected yet)';
@@ -91,7 +141,7 @@ Already detected by our deterministic analyzer (DO NOT repeat these):
 ${alreadyList}
 
 Look specifically for issues that pattern-matching misses:
-- Hidden O(n²) or exponential algorithmic complexity
+- Hidden O(n\u00b2) or exponential algorithmic complexity
 - Missing memoization / caching for expensive pure functions
 - Redundant recomputation of the same value across iterations
 - Inefficient data structure choices (e.g., list lookup when a set would be O(1))
@@ -140,12 +190,104 @@ function buildDiffSummary(parsedFiles) {
   }).join('\n\n');
 }
 
+// ─── Groq HTTP helper ─────────────────────────────────────────────────────────
+
+function groqGenerate(apiKey, model, prompt, timeout) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model,
+      messages:    [{ role: 'user', content: prompt }],
+      max_tokens:  1500,
+      temperature: 0.1,
+    });
+
+    const options = {
+      hostname: 'api.groq.com',
+      port:     443,
+      path:     '/openai/v1/chat/completions',
+      method:   'POST',
+      headers:  {
+        'Content-Type':   'application/json',
+        'Authorization':  `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(body),
+      },
+    };
+
+    const timer = setTimeout(() => reject(new Error('Request timed out')), timeout);
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        clearTimeout(timer);
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) return reject(new Error(parsed.error.message || 'Groq API error'));
+          resolve(parsed.choices?.[0]?.message?.content || '');
+        } catch (e) {
+          reject(new Error('Invalid JSON response from Groq'));
+        }
+      });
+    });
+
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Anthropic HTTP helper ────────────────────────────────────────────────────
+
+function anthropicGenerate(apiKey, model, prompt, timeout) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model,
+      max_tokens: 1500,
+      messages:   [{ role: 'user', content: prompt }],
+    });
+
+    const options = {
+      hostname: 'api.anthropic.com',
+      port:     443,
+      path:     '/v1/messages',
+      method:   'POST',
+      headers:  {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Length':    Buffer.byteLength(body),
+      },
+    };
+
+    const timer = setTimeout(() => reject(new Error('Request timed out')), timeout);
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        clearTimeout(timer);
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) return reject(new Error(parsed.error.message || 'Anthropic API error'));
+          resolve(parsed.content?.[0]?.text || '');
+        } catch (e) {
+          reject(new Error('Invalid JSON response from Anthropic'));
+        }
+      });
+    });
+
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.write(body);
+    req.end();
+  });
+}
+
 // ─── Ollama HTTP helpers ──────────────────────────────────────────────────────
 
 function pingOllama(endpoint, timeout) {
   return new Promise((resolve) => {
-    const url  = new URL('/api/tags', endpoint);
-    const lib  = url.protocol === 'https:' ? https : http;
+    const url   = new URL('/api/tags', endpoint);
+    const lib   = url.protocol === 'https:' ? https : http;
     const timer = setTimeout(() => resolve(false), Math.min(timeout, 5000));
 
     const req = lib.get(url.toString(), (res) => {
@@ -196,7 +338,6 @@ function ollamaGenerate(endpoint, model, prompt, timeout) {
 
 function parseResponse(raw) {
   try {
-    // Strip markdown code fences if the model added them
     const cleaned = raw
       .replace(/```json\s*/gi, '')
       .replace(/```\s*/g, '')
@@ -208,7 +349,6 @@ function parseResponse(raw) {
     }
     return { findings: obj.findings, parseError: null };
   } catch (e) {
-    // Try to extract a JSON object/array from the response
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {
       try {
@@ -240,7 +380,7 @@ function normalizeFindings(raw, parsedFiles) {
       lineNumber:   parseInt(f.line, 10) || 1,
       match:        f.code || '',
       detail:       String(f.description || ''),
-      source:       'llm',   // tag so reporter can distinguish
+      source:       'llm',
     }));
 }
 

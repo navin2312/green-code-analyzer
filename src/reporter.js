@@ -96,7 +96,7 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
   if (!llm || llm.skipped) {
     const reason = llm?.skipReason || 'LLM analysis not configured.';
     lines.push(`> ℹ️ ${reason}`);
-    lines.push('> To enable: install [Ollama](https://ollama.ai), run `ollama pull codellama`, then set `llm-enabled: true` in the workflow.');
+    lines.push('> To enable: add a `groq-api-key` secret (free at [console.groq.com](https://console.groq.com)) or an `anthropic-api-key` secret to your workflow.');
   } else if (llm.findings.length === 0) {
     lines.push(`> ✅ **No additional issues found** by \`${llm.model}\` — deterministic patterns covered everything.`);
   } else {

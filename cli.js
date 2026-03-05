@@ -53,9 +53,11 @@ program
   .option('--severity <level>',    'Minimum severity: low | medium | high | critical', 'low')
   .option('--fail-on-issues',      'Exit with code 1 if any issues are found', false)
   .option('--no-color',            'Disable coloured terminal output')
-  .option('--llm',                 'Enable Phase 2 LLM semantic analysis via Ollama', false)
-  .option('--llm-endpoint <url>',  'Ollama endpoint URL', 'http://localhost:11434')
-  .option('--llm-model <model>',   'Ollama model to use', 'codellama')
+  .option('--llm',                     'Enable Phase 2 LLM semantic analysis', false)
+  .option('--llm-endpoint <url>',      'Ollama endpoint URL (local fallback)', 'http://localhost:11434')
+  .option('--llm-model <model>',       'Ollama model to use (local fallback)', 'codellama')
+  .option('--groq-api-key <key>',      'Groq API key for cloud LLM (or set GROQ_API_KEY env var)')
+  .option('--anthropic-api-key <key>', 'Anthropic API key for cloud LLM (or set ANTHROPIC_API_KEY env var)')
   .action(async (files, opts) => {
     try {
       const parsedFiles = await collectInputs(files, opts);
@@ -71,12 +73,19 @@ program
       const energySummary = estimate(phase1);
 
       // Phase 2 — LLM semantic analysis (optional)
-      let llmResult = { findings: [], skipped: true, skipReason: 'LLM not enabled. Use --llm to activate.' };
-      if (opts.llm) {
-        console.error(`  🤖 Running LLM analysis with ${opts.llmModel}...`);
+      const groqKey      = opts.groqApiKey      || process.env.GROQ_API_KEY      || '';
+      const anthropicKey = opts.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '';
+      const llmActive    = opts.llm || !!groqKey || !!anthropicKey;
+
+      let llmResult = { findings: [], skipped: true, skipReason: 'LLM not enabled. Use --llm, --groq-api-key, or set GROQ_API_KEY env var.' };
+      if (llmActive) {
+        const backend = groqKey ? 'Groq' : anthropicKey ? 'Anthropic' : opts.llmModel;
+        console.error(`  Running LLM analysis via ${backend}...`);
         llmResult = await analyzeLLM(parsedFiles, phase1, {
-          endpoint: opts.llmEndpoint,
-          model:    opts.llmModel,
+          endpoint:        opts.llmEndpoint,
+          model:           opts.llmModel,
+          groqApiKey:      groqKey || null,
+          anthropicApiKey: anthropicKey || null,
         });
         if (llmResult.skipped) {
           console.error(`  ⚠  LLM skipped: ${llmResult.skipReason}`);
