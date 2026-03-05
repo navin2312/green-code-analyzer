@@ -1,0 +1,61 @@
+diff --git a/src/poller.js b/src/poller.js
+index 0000000..1111111 100644
+--- a/src/poller.js
++++ b/src/poller.js
+@@ -1,5 +1,12 @@
+ // Data polling module
+-function startPolling() {}
++function startPolling() {
++  setInterval(async function fetchStatus() {
++    const res = await fetch('/api/status');
++    const data = await res.json();
++    updateDashboard(data);
++  }, 500);
++}
++
++window.addEventListener('scroll', updateStickyHeader);
+
+ module.exports = { startPolling };
+diff --git a/src/data.js b/src/data.js
+index 2222222..3333333 100644
+--- a/src/data.js
++++ b/src/data.js
+@@ -1,4 +1,14 @@
+ // Data loading module
++async function loadUserProfiles(userIds) {
++  const profiles = [];
++  for (const id of userIds) {
++    const response = await fetch(`/api/profile/${id}`);
++    profiles.push(await response.json());
++  }
++  return profiles;
++}
++
++function cloneItems(items) {
++  return items.map(i => JSON.parse(JSON.stringify(i)));
++}
+
+ module.exports = {};
+diff --git a/analytics/report.py b/analytics/report.py
+index 4444444..5555555 100644
+--- a/analytics/report.py
++++ b/analytics/report.py
+@@ -1,5 +1,18 @@
+ # Analytics reporting module
++import pandas as pd
++
++def compute_revenue(df):
++    total = 0
++    for idx, row in df.iterrows():
++        total += row['qty'] * row['unit_price']
++    return total
++
++def build_report_text(records):
++    text = ''
++    for rec in records:
++        text += rec['name'] + ': ' + str(rec['value']) + '\n'
++    return text
++
++def fib(n):
++    if n <= 1: return n
++    return fib(n-1) + fib(n-2)

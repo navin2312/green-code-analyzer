@@ -1,0 +1,48 @@
+name: 'Green Code Analyzer'
+description: >
+  Detect energy anti-patterns in JavaScript and Python pull request diffs.
+  Posts a detailed report as a PR comment including an energy-efficiency grade,
+  estimated CO₂ savings, and per-pattern suggestions.
+
+author: 'Green Code Team'
+
+branding:
+  icon:  'zap'
+  color: 'green'
+
+inputs:
+  github-token:
+    description: >
+      GitHub token used to fetch the PR diff and post the comment.
+      Defaults to the built-in GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+
+  fail-on-issues:
+    description: >
+      Set to 'true' to fail (exit code 1) if any energy anti-patterns are
+      found above the severity threshold. Useful for enforcing a green gate.
+    required: false
+    default: 'false'
+
+  severity-threshold:
+    description: >
+      Minimum severity level to report.
+      One of: low | medium | high | critical.
+      Issues below this level are silently ignored.
+    required: false
+    default: 'low'
+
+outputs:
+  energy-score:
+    description: 'Total energy anti-pattern score (sum of energyPoints across all findings)'
+
+  grade:
+    description: 'Energy efficiency grade: A+, A, B, C, or D'
+
+  findings-count:
+    description: 'Number of energy anti-patterns detected above the severity threshold'
+
+runs:
+  using: 'node20'
+  main:  'dist/index.js'

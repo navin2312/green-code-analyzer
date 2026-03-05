@@ -1,0 +1,33 @@
+name: Energy Anti-Pattern Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: ['**']
+
+permissions:
+  contents: read
+  pull-requests: write  # needed to post PR comments
+
+jobs:
+  green-code-check:
+    name: 'Green Code: Energy Analysis'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Green Code Analyzer
+        uses: ./                         # Use this repo's action.yml
+        id: green
+        with:
+          github-token:       ${{ secrets.GITHUB_TOKEN }}
+          fail-on-issues:     'false'    # change to 'true' to enforce a green gate
+          severity-threshold: 'low'      # report all severities
+
+      - name: Print summary
+        run: |
+          echo "Energy Grade    : ${{ steps.green.outputs.grade }}"
+          echo "Energy Score    : ${{ steps.green.outputs.energy-score }}"
+          echo "Findings Count  : ${{ steps.green.outputs.findings-count }}"
