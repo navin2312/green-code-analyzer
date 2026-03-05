@@ -61,23 +61,34 @@ async function run() {
 
     if (pullNumber) {
       core.info(`Fetching diff for PR #${pullNumber}...`);
-      const response = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+      const { data: files } = await octokit.rest.pulls.listFiles({
         owner:       ctx.repo.owner,
         repo:        ctx.repo.repo,
         pull_number: pullNumber,
-        headers:     { accept: 'application/vnd.github.v3.diff' },
+        per_page:    100,
       });
-      diffContent = response.data;
+      core.info(`PR has ${files.length} changed file(s).`);
+      diffContent = files.map((f) =>
+        `diff --git a/${f.filename} b/${f.filename}\n` +
+        `--- a/${f.filename}\n` +
+        `+++ b/${f.filename}\n` +
+        (f.patch || '')
+      ).join('\n');
     } else if (ctx.eventName === 'push' && ctx.payload.before) {
       // Compare base..head for a push event
       core.info('Fetching diff for push event...');
-      const response = await octokit.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
-        owner:    ctx.repo.owner,
-        repo:     ctx.repo.repo,
-        basehead: `${ctx.payload.before}...${ctx.payload.after}`,
-        headers:  { accept: 'application/vnd.github.v3.diff' },
+      const { data: cmp } = await octokit.rest.repos.compareCommits({
+        owner: ctx.repo.owner,
+        repo:  ctx.repo.repo,
+        base:  ctx.payload.before,
+        head:  ctx.payload.after,
       });
-      diffContent = response.data;
+      diffContent = (cmp.files || []).map((f) =>
+        `diff --git a/${f.filename} b/${f.filename}\n` +
+        `--- a/${f.filename}\n` +
+        `+++ b/${f.filename}\n` +
+        (f.patch || '')
+      ).join('\n');
     } else {
       core.warning('No pull request or push diff found. Skipping analysis.');
       setOutputs(0, 'A+', 0);
