@@ -30344,7 +30344,7 @@ const DEFAULTS = {
  *
  * @param {Array}  parsedFiles     From diff-parser (only files with language set)
  * @param {Array}  phase1Findings  Already-found findings (to avoid duplicates)
- * @param {Object} opts            { endpoint, model, timeout, groqApiKey, anthropicApiKey }
+ * @param {Object} opts            { endpoint, model, timeout, groqApiKey }
  * @returns {Promise<{ findings, model, skipped, skipReason }>}
  */
 async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
@@ -31863,7 +31863,7 @@ function buildMarkdownReport(findings, estimate, opts = {}) {
   if (!llm || llm.skipped) {
     const reason = llm?.skipReason || 'LLM analysis not configured.';
     lines.push(`> ℹ️ ${reason}`);
-    lines.push('> To enable: add a `groq-api-key` secret (free at [console.groq.com](https://console.groq.com)) or an `anthropic-api-key` secret to your workflow.');
+    lines.push('> To enable: add a `groq-api-key` secret (free at [console.groq.com](https://console.groq.com)) to your workflow.');
   } else if (llm.findings.length === 0) {
     lines.push(`> ✅ **No additional issues found** by \`${llm.model}\` — deterministic patterns covered everything.`);
   } else {

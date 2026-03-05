@@ -30,7 +30,7 @@ const DEFAULTS = {
  *
  * @param {Array}  parsedFiles     From diff-parser (only files with language set)
  * @param {Array}  phase1Findings  Already-found findings (to avoid duplicates)
- * @param {Object} opts            { endpoint, model, timeout, groqApiKey, anthropicApiKey }
+ * @param {Object} opts            { endpoint, model, timeout, groqApiKey }
  * @returns {Promise<{ findings, model, skipped, skipReason }>}
  */
 async function analyzeLLM(parsedFiles, phase1Findings = [], opts = {}) {
